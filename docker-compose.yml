@@ -1,7 +1,8 @@
-version: "3"
+version: "3.9"
 
 services:
   lead_parser:
     build: .
     env_file:
       - .env
+    restart: unless-stopped

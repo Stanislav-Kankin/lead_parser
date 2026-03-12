@@ -1,33 +1,55 @@
 from aiogram import F, Router
 from aiogram.filters import Command
-from aiogram.types import CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup, Message
+from aiogram.types import CallbackQuery, Message
 
-from parsers.wb_parser import parse_wb
+from bot.keyboards import main_menu
+from enrichment.domain_analyzer import fetch_site_title
+from scoring.hypothesis_classifier import build_hypothesis
+from scoring.icp_classifier import classify_icp
+from sources.domain_search import search_domains
+from storage.lead_repository import get_last_leads, save_leads
 
 router = Router()
-
-
-def main_menu() -> InlineKeyboardMarkup:
-    return InlineKeyboardMarkup(
-        inline_keyboard=[
-            [InlineKeyboardButton(text="🔎 Найти бренды WB", callback_data="find_wb")],
-        ]
-    )
 
 
 @router.message(Command("start"))
 async def start(message: Message):
     await message.answer(
         "Lead Parser\n\n"
-        "Нажми кнопку ниже или просто отправь запрос.\n"
-        "Например: кроссовки",
+        "Нажми кнопку ниже или просто пришли поисковый запрос.\n"
+        "Пример: интернет-магазин спортивной одежды",
         reply_markup=main_menu(),
     )
 
 
-@router.callback_query(F.data == "find_wb")
-async def find_wb(callback: CallbackQuery):
-    await callback.message.answer("Отправь запрос для поиска брендов на Wildberries.\nНапример: кроссовки")
+@router.callback_query(F.data == "find_companies")
+async def find_companies(callback: CallbackQuery):
+    await callback.message.answer(
+        "Пришли поисковый запрос.\n"
+        "Пример: производство мебели оптом"
+    )
+    await callback.answer()
+
+
+@router.callback_query(F.data == "last_leads")
+async def last_leads(callback: CallbackQuery):
+    leads = get_last_leads(limit=10)
+    if not leads:
+        await callback.message.answer("Пока лидов нет.")
+        await callback.answer()
+        return
+
+    lines = ["Последние лиды:\n"]
+    for idx, lead in enumerate(leads, start=1):
+        icp = "да" if lead.is_icp else "нет"
+        lines.append(
+            f"{idx}. {lead.domain}\n"
+            f"ICP: {icp}\n"
+            f"Причина: {lead.icp_reason or '-'}\n"
+            f"Гипотеза: {lead.hypothesis or '-'}\n"
+        )
+
+    await callback.message.answer("\n".join(lines))
     await callback.answer()
 
 
@@ -35,34 +57,49 @@ async def find_wb(callback: CallbackQuery):
 async def handle_query(message: Message):
     query = (message.text or "").strip()
     if not query:
-        await message.answer("Пришли текстовый запрос. Например: кроссовки")
+        await message.answer("Пришли текстовый поисковый запрос.")
         return
 
-    await message.answer("Ищу бренды...")
+    await message.answer("Ищу компании...")
 
     try:
-        data = await parse_wb(query)
+        raw_results = await search_domains(query=query, limit=10)
     except Exception as e:
-        await message.answer(
-            "WB сейчас не отдал карточки или изменилась верстка.\n"
-            f"Текст ошибки: {e}"
+        await message.answer(f"Ошибка поиска: {e}")
+        return
+
+    if not raw_results:
+        await message.answer("Ничего не найдено. Попробуй другой запрос.")
+        return
+
+    leads_to_save = []
+    response_lines = ["Найденные компании:\n"]
+
+    for idx, item in enumerate(raw_results[:5], start=1):
+        domain = item["domain"]
+        company_name = item.get("company_name")
+        title = await fetch_site_title(domain)
+        is_icp, icp_reason = classify_icp(title=title, domain=domain)
+        hypothesis = build_hypothesis(title=title, is_icp=is_icp)
+
+        leads_to_save.append({
+            "query": query,
+            "company_name": company_name or title or domain,
+            "domain": domain,
+            "source": item.get("source", "ddg"),
+            "is_icp": is_icp,
+            "icp_reason": icp_reason,
+            "hypothesis": hypothesis,
+        })
+
+        response_lines.append(
+            f"{idx}. {domain}\n"
+            f"Название: {(company_name or title or '-')[:80]}\n"
+            f"ICP: {'да' if is_icp else 'нет'}\n"
+            f"Гипотеза: {hypothesis or '-'}\n"
         )
-        return
 
-    brands = []
-    seen = set()
-    for item in data:
-        brand = (item.get("brand") or "").strip()
-        if brand and brand not in seen:
-            seen.add(brand)
-            brands.append(brand)
+    saved = save_leads(leads_to_save)
+    response_lines.append(f"Сохранено новых лидов: {saved}")
 
-    if not brands:
-        await message.answer("Бренды не найдены. Попробуй другой запрос.")
-        return
-
-    text = "Найденные бренды:\n\n"
-    for idx, brand in enumerate(brands[:10], start=1):
-        text += f"{idx}. {brand}\n"
-
-    await message.answer(text)
+    await message.answer("\n".join(response_lines), disable_web_page_preview=True)

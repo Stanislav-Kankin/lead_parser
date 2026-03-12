@@ -1,6 +1,8 @@
 fastapi
 uvicorn
 aiogram
-playwright
 sqlalchemy
 python-dotenv
+httpx
+beautifulsoup4
+lxml

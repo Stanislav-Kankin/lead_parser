@@ -1,7 +1,7 @@
 from fastapi import FastAPI
 from storage.db import init_db
 
-app = FastAPI()
+app = FastAPI(title="Lead Parser MVP")
 
 
 @app.on_event("startup")
@@ -11,4 +11,4 @@ def startup():
 
 @app.get("/")
 def root():
-    return {"status": "lead parser running"}
+    return {"status": "ok", "service": "lead_parser_google_mvp_v1"}
