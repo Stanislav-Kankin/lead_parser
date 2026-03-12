@@ -11,5 +11,6 @@ engine = create_engine(
 
 SessionLocal = sessionmaker(bind=engine)
 
+
 def init_db():
     Base.metadata.create_all(bind=engine)

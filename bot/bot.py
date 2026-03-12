@@ -8,14 +8,14 @@ from bot.handlers import router
 
 load_dotenv()
 
-BOT_TOKEN = os.getenv("BOT_TOKEN")
-
 
 async def main():
+    bot_token = os.getenv("BOT_TOKEN")
+    if not bot_token:
+        raise RuntimeError("Не найден BOT_TOKEN в .env")
 
-    bot = Bot(BOT_TOKEN)
+    bot = Bot(bot_token)
     dp = Dispatcher()
-
     dp.include_router(router)
 
     await dp.start_polling(bot)
