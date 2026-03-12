@@ -1,32 +1,31 @@
 HYPOTHESIS_LABELS = {
-    "high_cac_or_scaling_plateau": "Вероятно упёрлись в стоимость привлечения и масштабирование",
-    "marketplace_dependency": "Похоже есть зависимость от маркетплейсов / чужого спроса",
-    "no_system_leadgen": "Похоже нет системного привлечения спроса и лидогенерации",
-    "need_manual_review": "Нужна ручная проверка экономики и каналов роста",
+    "high_cac_or_scaling_plateau": "Вероятно, упёрлись в рост CAC или потолок масштабирования.",
+    "no_system_leadgen": "Похоже, нет системного direct-канала и управляемого притока спроса.",
+    "marketplace_dependency": "Есть риск сильной зависимости от маркетплейсов или партнёрских каналов.",
+    "need_manual_review": "Нужна ручная проверка бизнес-модели и текущего канала продаж.",
 }
-
 
 OPENER_LABELS = {
-    "high_cac_or_scaling_plateau": "Как сейчас у вас устроено масштабирование платного трафика и что происходит с CAC при росте бюджета?",
-    "marketplace_dependency": "Какая доля спроса у вас идёт через собственные каналы, а какая через маркетплейсы или посредников?",
-    "no_system_leadgen": "Как у вас сейчас устроено привлечение новых клиентов: есть системный поток спроса или всё держится на текущих каналах и повторных продажах?",
-    "need_manual_review": "Где сейчас главный потолок роста: трафик, конверсия, отдел продаж или экономика канала?",
+    "high_cac_or_scaling_plateau": "Похоже, у вас уже есть спрос, но масштабирование в performance становится всё дороже. Интересно понять, где сейчас упираетесь в экономику роста?",
+    "no_system_leadgen": "Часто у производителей и B2B-компаний в такой точке нет стабильного канала прямого спроса. Есть смысл коротко сверить, насколько у вас маркетинг вообще управляет ростом?",
+    "marketplace_dependency": "Если значимая часть продаж завязана на внешние площадки, обычно страдает контроль над спросом и маржой. Есть смысл обсудить, как вы сейчас снижаете эту зависимость?",
+    "need_manual_review": "Есть ощущение, что у вас есть потенциал для роста в direct, но без короткого разговора это лучше не додумывать. Могу прислать гипотезу по вашему кейсу в 2–3 пунктах.",
 }
 
 
-def build_hypothesis(title: str | None, is_icp: bool, company_name: str | None = None, meta_description: str | None = None, icp_score: int = 0, text: str | None = None) -> tuple[str | None, str | None, str | None]:
+def build_hypothesis(title: str | None, is_icp: bool, company_name: str | None = None, text: str | None = None) -> tuple[str | None, str | None]:
     if not is_icp:
-        return None, None, None
+        return None, None
 
-    combined = " ".join(filter(None, [title, company_name, meta_description, text])).lower()
+    blob = f"{title or ''} {company_name or ''} {text or ''}".lower()
 
-    if any(word in combined for word in ["маркетплейс", "ozon", "wildberries"]):
-        code = "marketplace_dependency"
-    elif any(word in combined for word in ["оптом", "дистрибьютор", "поставщик", "b2b"]):
-        code = "no_system_leadgen"
-    elif icp_score >= 5:
-        code = "high_cac_or_scaling_plateau"
+    if any(word in blob for word in ["маркетплейс", "wb", "ozon", "дистрибьютор"]):
+        key = "marketplace_dependency"
+    elif any(word in blob for word in ["оптом", "производство", "производитель", "factory", "manufacturer"]):
+        key = "no_system_leadgen"
+    elif any(word in blob for word in ["бренд", "официальный сайт", "для бизнеса"]):
+        key = "high_cac_or_scaling_plateau"
     else:
-        code = "need_manual_review"
+        key = "need_manual_review"
 
-    return code, HYPOTHESIS_LABELS[code], OPENER_LABELS[code]
+    return HYPOTHESIS_LABELS[key], OPENER_LABELS[key]

@@ -1,89 +1,101 @@
 from typing import Any
 
-POSITIVE_RULES = {
+POSITIVE_SIGNALS = {
+    "производитель": 4,
     "производство": 3,
-    "производитель": 3,
     "завод": 3,
+    "фабрика": 3,
     "оптом": 2,
     "оптовый": 2,
     "поставщик": 2,
     "дистрибьютор": 2,
-    "b2b": 2,
+    "b2b": 3,
     "для бизнеса": 2,
-    "компания": 1,
+    "контрактное производство": 4,
+    "private label": 4,
     "бренд": 1,
+    "официальный сайт": 1,
 }
 
-NEGATIVE_RULES = {
-    "интернет-магазин": -4,
-    "интернет магазин": -4,
-    "магазин": -3,
-    "купить": -3,
-    "доставка": -2,
-    "отзывы": -2,
-    "обзор": -3,
-    "сравнение": -3,
+NEGATIVE_SIGNALS = {
+    "интернет-магазин": -5,
+    "интернет магазин": -5,
+    "магазин": -4,
+    "купить": -4,
+    "цена": -3,
+    "цены": -3,
+    "отзывы": -3,
+    "обзор": -4,
     "новости": -2,
+    "сравнение": -4,
     "маркетплейс": -4,
-    "каталог": -2,
-    "розница": -2,
+    "каталог": -3,
+    "доставка": -2,
 }
 
-
-TYPE_LABELS = {
+TYPE_MAP = {
     "manufacturer_or_b2b": "Производитель / B2B",
     "possible_icp": "Потенциальный ICP",
     "low_relevance": "Низкая релевантность",
 }
 
-PRIORITY_LABELS = {
+PRIORITY_MAP = {
     "high": "Высокий",
     "medium": "Средний",
     "low": "Низкий",
 }
 
 
+def classify_icp(
+    title: str | None,
+    domain: str,
+    company_name: str | None = None,
+    description: str | None = None,
+    h1: str | None = None,
+    text: str | None = None,
+) -> dict[str, Any]:
+    full_text = " ".join(
+        part for part in [title, description, h1, company_name, domain, text] if part
+    ).lower()
 
-def _collect_matches(text: str, rules: dict[str, int]) -> list[str]:
-    return [word for word in rules if word in text]
+    score = 0
+    positive_hits: list[str] = []
+    negative_hits: list[str] = []
 
+    for signal, weight in POSITIVE_SIGNALS.items():
+        if signal in full_text:
+            score += weight
+            positive_hits.append(signal)
 
+    for signal, weight in NEGATIVE_SIGNALS.items():
+        if signal in full_text:
+            score += weight
+            negative_hits.append(signal)
 
-def classify_icp(title: str | None, domain: str, company_name: str | None = None, meta_description: str | None = None, text: str | None = None) -> dict[str, Any]:
-    full_text = " ".join(filter(None, [title, company_name, meta_description, text, domain])).lower()
+    is_icp = score >= 2
 
-    positives = _collect_matches(full_text, POSITIVE_RULES)
-    negatives = _collect_matches(full_text, NEGATIVE_RULES)
-    score = sum(POSITIVE_RULES[word] for word in positives) + sum(NEGATIVE_RULES[word] for word in negatives)
-
-    is_icp = score >= 2 and not ("интернет-магазин" in negatives and score < 4)
-
-    if score >= 5:
+    if score >= 4:
         lead_type = "manufacturer_or_b2b"
         priority = "high"
-    elif is_icp:
+    elif score >= 2:
         lead_type = "possible_icp"
         priority = "medium"
     else:
         lead_type = "low_relevance"
         priority = "low"
 
-    reason_parts = [f"Оценка: {score}"]
-    if positives:
-        reason_parts.append(f"Плюсы: {', '.join(positives)}")
-    if negatives:
-        reason_parts.append(f"Минусы: {', '.join(negatives)}")
-    if len(reason_parts) == 1:
-        reason_parts.append("Сигналов мало")
+    reason_parts = [f"score={score}"]
+    if positive_hits:
+        reason_parts.append("positive:" + ",".join(dict.fromkeys(positive_hits)))
+    if negative_hits:
+        reason_parts.append("negative:" + ",".join(dict.fromkeys(negative_hits)))
 
     return {
         "is_icp": is_icp,
         "icp_reason": "; ".join(reason_parts),
-        "icp_score": score,
         "lead_type": lead_type,
+        "lead_type_ru": TYPE_MAP[lead_type],
         "priority": priority,
-        "lead_type_label": TYPE_LABELS[lead_type],
-        "priority_label": PRIORITY_LABELS[priority],
-        "positives": positives,
-        "negatives": negatives,
+        "priority_ru": PRIORITY_MAP[priority],
+        "score": score,
     }
