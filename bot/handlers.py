@@ -1,3 +1,5 @@
+import asyncio
+
 from aiogram import F, Router
 from aiogram.filters import Command
 from aiogram.types import CallbackQuery, Message
@@ -59,11 +61,19 @@ async def handle_query(message: Message):
     await message.answer("Ищу компании...")
 
     queries = build_queries(query)
-    raw_results = await search_domains_multi(
-        queries=queries,
-        per_query_limit=12,
-        total_limit=35,
-    )
+
+    try:
+        raw_results = await search_domains_multi(
+            queries=queries,
+            per_query_limit=10,
+            total_limit=25,
+        )
+    except asyncio.TimeoutError:
+        await message.answer("Поиск завис по таймауту. Попробуй еще раз или упрости запрос.")
+        return
+    except Exception as e:
+        await message.answer(f"Ошибка поиска: {e}")
+        return
 
     if not raw_results:
         await message.answer("Ничего не найдено. Попробуй другой запрос.")

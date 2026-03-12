@@ -1,19 +1,10 @@
-# lead_parser Google MVP v1.2
+# lead_parser Google MVP v1.2.1 fix
 
-В этой версии источник поиска переведен с ручного парсинга DuckDuckGo HTML
-на библиотеку ddgs.
+Что исправлено:
+- авто-миграция SQLite: если нет колонки title, она будет добавлена
+- поиск через ddgs вынесен в thread через asyncio.to_thread
+- усилен фильтр мусорных доменов
+- добавлен таймаут на поиск, чтобы бот не висел бесконечно
 
-## Зачем
-DuckDuckGo HTML/lite может отдавать пустую или нестабильную выдачу.
-Библиотека ddgs уже умеет работать с разными backend-ами.
-
-## Запуск
-```bash
-python -m venv venv
-# Windows PowerShell
-.\venv\Scripts\activate
-py -m pip install -r requirements.txt
-copy .env.example .env
-# заполни BOT_TOKEN в .env
-py -m bot.bot
-```
+Если у тебя старая база и хочешь самый простой путь:
+можно просто удалить файл leads.db перед запуском.

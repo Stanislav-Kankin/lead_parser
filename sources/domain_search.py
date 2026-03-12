@@ -1,3 +1,4 @@
+import asyncio
 from urllib.parse import urlparse
 
 from ddgs import DDGS
@@ -28,6 +29,9 @@ BAD_DOMAINS = {
     "amazon.com",
     "irecommend.ru",
     "otzovik.com",
+    "wikipedia.org",
+    "wiktionary.org",
+    "youtube.ru",
 }
 
 
@@ -50,11 +54,11 @@ def is_bad_domain(domain: str) -> bool:
     return any(domain == bad or domain.endswith("." + bad) for bad in BAD_DOMAINS)
 
 
-async def search_domains_multi(queries: list[str], per_query_limit: int = 12, total_limit: int = 35) -> list[dict]:
+def _search_sync(queries: list[str], per_query_limit: int = 10, total_limit: int = 25) -> list[dict]:
     collected = []
     seen_domains = set()
 
-    with DDGS(timeout=20, verify=False) as ddgs:
+    with DDGS(timeout=15, verify=False) as ddgs:
         for query in queries:
             try:
                 results = ddgs.text(
@@ -86,3 +90,10 @@ async def search_domains_multi(queries: list[str], per_query_limit: int = 12, to
                     return collected
 
     return collected
+
+
+async def search_domains_multi(queries: list[str], per_query_limit: int = 10, total_limit: int = 25) -> list[dict]:
+    return await asyncio.wait_for(
+        asyncio.to_thread(_search_sync, queries, per_query_limit, total_limit),
+        timeout=40,
+    )

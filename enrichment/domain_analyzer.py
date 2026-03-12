@@ -12,7 +12,7 @@ async def fetch_site_title(domain: str) -> str | None:
         )
     }
 
-    async with httpx.AsyncClient(timeout=12, follow_redirects=True, headers=headers, verify=False) as client:
+    async with httpx.AsyncClient(timeout=8, follow_redirects=True, headers=headers, verify=False) as client:
         for url in variants:
             try:
                 response = await client.get(url)
