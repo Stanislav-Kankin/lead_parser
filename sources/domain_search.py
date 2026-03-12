@@ -1,8 +1,8 @@
 import asyncio
-from urllib.parse import urlparse
 
 from ddgs import DDGS
 
+from utils.domain_normalizer import normalize_domain
 
 BAD_DOMAINS = {
     "youtube.com",
@@ -32,31 +32,34 @@ BAD_DOMAINS = {
     "wikipedia.org",
     "wiktionary.org",
     "youtube.ru",
+    "pulscen.ru",
+    "satu.kz",
+    "tiu.ru",
+    "prom.ua",
+    "deal.by",
+    "flagma.ru",
 }
 
-
-def normalize_domain(url: str) -> str | None:
-    if not url:
-        return None
-
-    parsed = urlparse(url)
-    host = (parsed.netloc or "").lower().strip()
-    if not host and parsed.path:
-        host = parsed.path.lower().strip()
-
-    if host.startswith("www."):
-        host = host[4:]
-
-    return host or None
+BAD_DOMAIN_PARTS = (
+    "market",
+    "marketplace",
+    "catalog",
+    "forum",
+    "wiki",
+    "youtube",
+    "reviews",
+)
 
 
 def is_bad_domain(domain: str) -> bool:
-    return any(domain == bad or domain.endswith("." + bad) for bad in BAD_DOMAINS)
+    if any(domain == bad or domain.endswith("." + bad) for bad in BAD_DOMAINS):
+        return True
+    return any(part in domain for part in BAD_DOMAIN_PARTS)
 
 
 def _search_sync(queries: list[str], per_query_limit: int = 10, total_limit: int = 25) -> list[dict]:
-    collected = []
-    seen_domains = set()
+    collected: list[dict] = []
+    seen_domains: set[str] = set()
 
     with DDGS(timeout=15, verify=False) as ddgs:
         for query in queries:
@@ -81,9 +84,11 @@ def _search_sync(queries: list[str], per_query_limit: int = 10, total_limit: int
                 collected.append({
                     "company_name": item.get("title"),
                     "domain": domain,
+                    "domain_normalized": domain,
                     "url": href,
                     "source": "ddgs",
                     "source_query": query,
+                    "snippet": item.get("body"),
                 })
 
                 if len(collected) >= total_limit:
