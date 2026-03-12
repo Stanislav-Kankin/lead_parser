@@ -1,0 +1,6 @@
+fastapi
+uvicorn
+aiogram
+playwright
+sqlalchemy
+python-dotenv

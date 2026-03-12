@@ -1,0 +1,7 @@
+version: "3"
+
+services:
+  lead_parser:
+    build: .
+    env_file:
+      - .env
