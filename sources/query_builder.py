@@ -1,4 +1,5 @@
 TEMPLATES = [
+    "{q}",
     "интернет магазин {q}",
     "{q} оптом",
     "поставщик {q}",
@@ -14,15 +15,13 @@ def build_queries(base_query: str) -> list[str]:
     if not q:
         return []
 
-    queries = [template.format(q=q) for template in TEMPLATES]
-    queries.insert(0, q)
-    # Убираем дубли с сохранением порядка
     seen = set()
     result = []
-    for item in queries:
-        normalized = item.lower().strip()
-        if normalized in seen:
+    for template in TEMPLATES:
+        value = template.format(q=q).strip()
+        key = value.lower()
+        if key in seen:
             continue
-        seen.add(normalized)
-        result.append(item)
+        seen.add(key)
+        result.append(value)
     return result

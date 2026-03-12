@@ -21,7 +21,7 @@ def save_leads(leads: Iterable[dict]) -> int:
                 query=item["query"],
                 company_name=item.get("company_name"),
                 domain=domain,
-                source=item.get("source", "ddg"),
+                source=item.get("source", "ddgs"),
                 is_icp=item.get("is_icp", False),
                 icp_reason=item.get("icp_reason"),
                 hypothesis=item.get("hypothesis"),

@@ -1,7 +1,6 @@
-from urllib.parse import quote, urlparse
+from urllib.parse import urlparse
 
-import httpx
-from bs4 import BeautifulSoup
+from ddgs import DDGS
 
 
 BAD_DOMAINS = {
@@ -27,12 +26,8 @@ BAD_DOMAINS = {
     "aliexpress.com",
     "aliexpress.ru",
     "amazon.com",
-    "market.yandex.com",
-    "sbermegamarket.ru",
-    "onliner.by",
     "irecommend.ru",
     "otzovik.com",
-    "youtube.ru",
 }
 
 
@@ -41,81 +36,53 @@ def normalize_domain(url: str) -> str | None:
         return None
 
     parsed = urlparse(url)
-    host = parsed.netloc.lower().strip()
+    host = (parsed.netloc or "").lower().strip()
     if not host and parsed.path:
         host = parsed.path.lower().strip()
-
-    if not host:
-        return None
 
     if host.startswith("www."):
         host = host[4:]
 
-    return host
+    return host or None
 
 
 def is_bad_domain(domain: str) -> bool:
     return any(domain == bad or domain.endswith("." + bad) for bad in BAD_DOMAINS)
 
 
-async def search_domains_once(query: str, limit: int = 20) -> list[dict]:
-    url = f"https://html.duckduckgo.com/html/?q={quote(query)}"
-    headers = {
-        "User-Agent": (
-            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-            "AppleWebKit/537.36 (KHTML, like Gecko) "
-            "Chrome/122.0.0.0 Safari/537.36"
-        )
-    }
-
-    async with httpx.AsyncClient(timeout=20, follow_redirects=True, headers=headers) as client:
-        response = await client.get(url)
-        response.raise_for_status()
-
-    soup = BeautifulSoup(response.text, "lxml")
-    results = []
-    seen = set()
-
-    for a in soup.select("a.result__a"):
-        href = a.get("href")
-        domain = normalize_domain(href)
-        if not domain or is_bad_domain(domain) or domain in seen:
-            continue
-
-        seen.add(domain)
-        results.append({
-            "company_name": a.get_text(strip=True),
-            "domain": domain,
-            "url": href,
-            "source": "ddg",
-            "source_query": query,
-        })
-
-        if len(results) >= limit:
-            break
-
-    return results
-
-
-async def search_domains_multi(queries: list[str], per_query_limit: int = 15, total_limit: int = 40) -> list[dict]:
+async def search_domains_multi(queries: list[str], per_query_limit: int = 12, total_limit: int = 35) -> list[dict]:
     collected = []
     seen_domains = set()
 
-    for query in queries:
-        try:
-            batch = await search_domains_once(query=query, limit=per_query_limit)
-        except Exception:
-            continue
-
-        for item in batch:
-            domain = item["domain"]
-            if domain in seen_domains:
+    with DDGS(timeout=20, verify=False) as ddgs:
+        for query in queries:
+            try:
+                results = ddgs.text(
+                    query,
+                    region="ru-ru",
+                    safesearch="off",
+                    backend="auto",
+                    max_results=per_query_limit,
+                )
+            except Exception:
                 continue
 
-            seen_domains.add(domain)
-            collected.append(item)
+            for item in results or []:
+                href = item.get("href")
+                domain = normalize_domain(href)
+                if not domain or is_bad_domain(domain) or domain in seen_domains:
+                    continue
 
-            if len(collected) >= total_limit:
-                return collected
+                seen_domains.add(domain)
+                collected.append({
+                    "company_name": item.get("title"),
+                    "domain": domain,
+                    "url": href,
+                    "source": "ddgs",
+                    "source_query": query,
+                })
+
+                if len(collected) >= total_limit:
+                    return collected
 
     return collected

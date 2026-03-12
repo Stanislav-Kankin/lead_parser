@@ -11,13 +11,13 @@ load_dotenv()
 
 
 async def main():
-    bot_token = os.getenv("BOT_TOKEN")
-    if not bot_token:
+    token = os.getenv("BOT_TOKEN")
+    if not token:
         raise RuntimeError("Не найден BOT_TOKEN в .env")
 
     init_db()
 
-    bot = Bot(bot_token)
+    bot = Bot(token)
     dp = Dispatcher()
     dp.include_router(router)
 

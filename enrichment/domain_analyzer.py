@@ -3,10 +3,7 @@ from bs4 import BeautifulSoup
 
 
 async def fetch_site_title(domain: str) -> str | None:
-    variants = [
-        f"https://{domain}",
-        f"http://{domain}",
-    ]
+    variants = [f"https://{domain}", f"http://{domain}"]
     headers = {
         "User-Agent": (
             "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "

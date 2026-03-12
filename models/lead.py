@@ -13,7 +13,7 @@ class Lead(Base):
     query = Column(String, nullable=False)
     company_name = Column(String, nullable=True)
     domain = Column(String, nullable=False, unique=True)
-    source = Column(String, nullable=False, default="ddg")
+    source = Column(String, nullable=False, default="ddgs")
     is_icp = Column(Boolean, nullable=False, default=False)
     icp_reason = Column(String, nullable=True)
     hypothesis = Column(String, nullable=True)
