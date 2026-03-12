@@ -31,30 +31,25 @@ BAD_DOMAINS = {
     "otzovik.com",
     "wikipedia.org",
     "wiktionary.org",
-    "youtube.ru",
-    "pulscen.ru",
-    "satu.kz",
-    "tiu.ru",
-    "prom.ua",
-    "deal.by",
-    "flagma.ru",
+    "rozetka.com.ua",
+    "versus.com",
 }
 
-BAD_DOMAIN_PARTS = (
-    "market",
+BAD_SUBSTRINGS = [
     "marketplace",
     "catalog",
-    "forum",
     "wiki",
-    "youtube",
-    "reviews",
-)
+    "review",
+    "compare",
+    "forum",
+]
 
 
 def is_bad_domain(domain: str) -> bool:
     if any(domain == bad or domain.endswith("." + bad) for bad in BAD_DOMAINS):
         return True
-    return any(part in domain for part in BAD_DOMAIN_PARTS)
+    return any(part in domain for part in BAD_SUBSTRINGS)
+
 
 
 def _search_sync(queries: list[str], per_query_limit: int = 10, total_limit: int = 25) -> list[dict]:
@@ -84,13 +79,10 @@ def _search_sync(queries: list[str], per_query_limit: int = 10, total_limit: int
                 collected.append({
                     "company_name": item.get("title"),
                     "domain": domain,
-                    "domain_normalized": domain,
                     "url": href,
                     "source": "ddgs",
                     "source_query": query,
-                    "snippet": item.get("body"),
                 })
-
                 if len(collected) >= total_limit:
                     return collected
 
@@ -100,5 +92,5 @@ def _search_sync(queries: list[str], per_query_limit: int = 10, total_limit: int
 async def search_domains_multi(queries: list[str], per_query_limit: int = 10, total_limit: int = 25) -> list[dict]:
     return await asyncio.wait_for(
         asyncio.to_thread(_search_sync, queries, per_query_limit, total_limit),
-        timeout=40,
+        timeout=50,
     )

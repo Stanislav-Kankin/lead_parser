@@ -1,14 +1,11 @@
 import re
-from typing import Any
-from urllib.parse import urljoin
 
 import httpx
 from bs4 import BeautifulSoup
 
-EMAIL_RE = re.compile(r"[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}", re.IGNORECASE)
-PHONE_RE = re.compile(r"(?:\+7|8)[\s\-()]*\d[\d\s\-()]{8,}\d")
+EMAIL_RE = re.compile(r"[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}", re.I)
+PHONE_RE = re.compile(r"(?:\+?\d[\d\s()\-]{8,}\d)")
 
-CONTACT_PATHS = ("", "/contacts", "/contact", "/kontakty", "/about", "/company")
 HEADERS = {
     "User-Agent": (
         "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
@@ -18,99 +15,68 @@ HEADERS = {
 }
 
 
-async def _fetch_html(client: httpx.AsyncClient, url: str) -> str | None:
-    try:
-        response = await client.get(url)
-        response.raise_for_status()
-        content_type = response.headers.get("content-type", "").lower()
-        if "text/html" not in content_type:
-            return None
-        return response.text
-    except Exception:
+def _clean_text(value: str | None, limit: int = 400) -> str | None:
+    if not value:
         return None
+    text = re.sub(r"\s+", " ", value).strip()
+    return text[:limit] if text else None
 
 
-def _clean_phone(phone: str) -> str:
-    return re.sub(r"\s+", " ", phone).strip()
+
+def _pick_email(text: str) -> str | None:
+    for email in EMAIL_RE.findall(text or ""):
+        lowered = email.lower()
+        if any(x in lowered for x in ["example.com", "sentry", "noreply", "no-reply"]):
+            continue
+        return lowered[:200]
+    return None
 
 
-def _extract_text_blocks(soup: BeautifulSoup) -> dict[str, str | None]:
-    title = soup.title.get_text(" ", strip=True)[:200] if soup.title else None
 
-    description = None
-    meta = soup.find("meta", attrs={"name": "description"})
-    if meta and meta.get("content"):
-        description = meta.get("content", "").strip()[:300]
-
-    h1 = soup.find("h1")
-    h1_text = h1.get_text(" ", strip=True)[:200] if h1 else None
-
-    body_text = soup.get_text(" ", strip=True)
-    compact_text = re.sub(r"\s+", " ", body_text)[:2500]
-
-    return {
-        "title": title,
-        "description": description,
-        "h1": h1_text,
-        "text": compact_text,
-    }
+def _pick_phone(text: str) -> str | None:
+    for raw in PHONE_RE.findall(text or ""):
+        digits = re.sub(r"\D", "", raw)
+        if len(digits) < 10 or len(digits) > 15:
+            continue
+        return raw.strip()[:50]
+    return None
 
 
-async def analyze_domain(domain: str) -> dict[str, Any]:
+async def analyze_domain(domain: str) -> dict:
     variants = [f"https://{domain}", f"http://{domain}"]
 
-    async with httpx.AsyncClient(
-        timeout=8,
-        follow_redirects=True,
-        headers=HEADERS,
-        verify=False,
-    ) as client:
-        base_url = None
-        home_html = None
+    async with httpx.AsyncClient(timeout=10, follow_redirects=True, headers=HEADERS, verify=False) as client:
         for url in variants:
-            home_html = await _fetch_html(client, url)
-            if home_html:
-                base_url = url
-                break
+            try:
+                response = await client.get(url)
+                response.raise_for_status()
+                html = response.text[:500000]
+                soup = BeautifulSoup(html, "lxml")
 
-        if not home_html or not base_url:
-            return {
-                "title": None,
-                "description": None,
-                "h1": None,
-                "text": None,
-                "emails": [],
-                "phones": [],
-            }
+                title = soup.title.get_text(" ", strip=True) if soup.title else None
+                meta = soup.find("meta", attrs={"name": "description"})
+                meta_description = meta.get("content") if meta else None
+                h1 = soup.find("h1")
+                h1_text = h1.get_text(" ", strip=True) if h1 else None
+                body_text = soup.get_text(" ", strip=True)
+                sample_text = _clean_text(" ".join(filter(None, [title, meta_description, h1_text, body_text[:3000]])), 3000)
 
-        pages = [home_html]
-        for path in CONTACT_PATHS[1:]:
-            html = await _fetch_html(client, urljoin(base_url, path))
-            if html:
-                pages.append(html)
-
-    emails: set[str] = set()
-    phones: set[str] = set()
-    title = description = h1 = text = None
-
-    for idx, html in enumerate(pages):
-        soup = BeautifulSoup(html, "lxml")
-        blocks = _extract_text_blocks(soup)
-
-        if idx == 0:
-            title = blocks["title"]
-            description = blocks["description"]
-            h1 = blocks["h1"]
-            text = blocks["text"]
-
-        emails.update(email.lower() for email in EMAIL_RE.findall(html))
-        phones.update(_clean_phone(phone) for phone in PHONE_RE.findall(html))
+                return {
+                    "title": _clean_text(title, 200),
+                    "meta_description": _clean_text(meta_description, 300),
+                    "h1": _clean_text(h1_text, 200),
+                    "text": sample_text,
+                    "email": _pick_email(html),
+                    "phone": _pick_phone(html),
+                }
+            except Exception:
+                continue
 
     return {
-        "title": title,
-        "description": description,
-        "h1": h1,
-        "text": text,
-        "emails": sorted(emails)[:3],
-        "phones": sorted(phones)[:3],
+        "title": None,
+        "meta_description": None,
+        "h1": None,
+        "text": None,
+        "email": None,
+        "phone": None,
     }

@@ -12,14 +12,19 @@ engine = create_engine(
 SessionLocal = sessionmaker(bind=engine, autoflush=False, autocommit=False)
 
 
-REQUIRED_COLUMNS: dict[str, str] = {
+REQUIRED_COLUMNS = {
     "title": "ALTER TABLE leads ADD COLUMN title VARCHAR",
     "domain_normalized": "ALTER TABLE leads ADD COLUMN domain_normalized VARCHAR",
+    "icp_score": "ALTER TABLE leads ADD COLUMN icp_score INTEGER DEFAULT 0",
     "lead_type": "ALTER TABLE leads ADD COLUMN lead_type VARCHAR",
     "priority": "ALTER TABLE leads ADD COLUMN priority VARCHAR",
+    "opener": "ALTER TABLE leads ADD COLUMN opener VARCHAR",
+    "meta_description": "ALTER TABLE leads ADD COLUMN meta_description VARCHAR",
     "company_email": "ALTER TABLE leads ADD COLUMN company_email VARCHAR",
     "company_phone": "ALTER TABLE leads ADD COLUMN company_phone VARCHAR",
     "status": "ALTER TABLE leads ADD COLUMN status VARCHAR DEFAULT 'new'",
+    "owner": "ALTER TABLE leads ADD COLUMN owner VARCHAR",
+    "comment": "ALTER TABLE leads ADD COLUMN comment VARCHAR",
     "updated_at": "ALTER TABLE leads ADD COLUMN updated_at DATETIME",
     "last_enriched_at": "ALTER TABLE leads ADD COLUMN last_enriched_at DATETIME",
 }
@@ -32,17 +37,13 @@ def _ensure_columns():
 
     columns = {col["name"] for col in inspector.get_columns("leads")}
     with engine.begin() as conn:
-        for name, ddl in REQUIRED_COLUMNS.items():
+        for name, sql in REQUIRED_COLUMNS.items():
             if name not in columns:
-                conn.execute(text(ddl))
+                conn.execute(text(sql))
 
-        conn.execute(text("UPDATE leads SET domain_normalized = COALESCE(domain_normalized, domain) WHERE domain_normalized IS NULL OR domain_normalized = ''"))
-        conn.execute(text("UPDATE leads SET updated_at = COALESCE(updated_at, created_at) WHERE updated_at IS NULL"))
-        conn.execute(text("UPDATE leads SET status = COALESCE(status, 'new') WHERE status IS NULL OR status = ''"))
-
-        indexes = {idx["name"] for idx in inspector.get_indexes("leads")}
-        if "ix_leads_domain_normalized" not in indexes:
-            conn.execute(text("CREATE UNIQUE INDEX IF NOT EXISTS ix_leads_domain_normalized ON leads(domain_normalized)"))
+        conn.execute(text("UPDATE leads SET domain_normalized = lower(domain) WHERE domain_normalized IS NULL AND domain IS NOT NULL"))
+        conn.execute(text("UPDATE leads SET updated_at = created_at WHERE updated_at IS NULL"))
+        conn.execute(text("UPDATE leads SET status = 'new' WHERE status IS NULL OR status = ''"))
 
 
 def init_db():

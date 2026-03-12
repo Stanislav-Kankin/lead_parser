@@ -1,45 +1,39 @@
-B2B_TEMPLATES = [
+BASE_TEMPLATES = [
     "{q}",
-    "{q} оптом",
     "{q} производитель",
     "{q} производство",
-    "{q} поставщик",
+    "{q} оптом",
     "{q} оптовый поставщик",
     "{q} b2b",
-    "{q} для бизнеса",
-    "{q} официальный сайт производитель",
-    "{q} manufacturer",
+    "поставщик {q}",
+    "дистрибьютор {q}",
+    "завод {q}",
+    "бренд {q}",
 ]
 
-NEGATIVE_HINTS = [
-    "wildberries",
-    "ozon",
-    "avito",
-    "маркетплейс",
-    "купить",
+NEGATIVE_SUFFIXES = [
+    "-маркетплейс -wildberries -ozon -avito -youtube -vk",
+    "-интернет-магазин -розница -отзывы -обзор",
 ]
 
 
 def build_queries(base_query: str) -> list[str]:
-    q = " ".join((base_query or "").strip().split())
+    q = (base_query or "").strip()
     if not q:
         return []
 
-    seen: set[str] = set()
     result: list[str] = []
+    seen: set[str] = set()
 
-    for template in B2B_TEMPLATES:
-        value = template.format(q=q).strip()
-        key = value.lower()
-        if key in seen:
-            continue
-        seen.add(key)
-        result.append(value)
+    for template in BASE_TEMPLATES:
+        base = template.format(q=q).strip()
+        variants = [base]
+        variants.extend(f"{base} {suffix}" for suffix in NEGATIVE_SUFFIXES)
+        for value in variants:
+            key = value.lower()
+            if key in seen:
+                continue
+            seen.add(key)
+            result.append(value)
 
-    # Один «очищающий» запрос против мусора выдачи.
-    anti_marketplace = q + " " + " ".join(f'-"{word}"' for word in NEGATIVE_HINTS)
-    anti_marketplace_key = anti_marketplace.lower()
-    if anti_marketplace_key not in seen:
-        result.append(anti_marketplace)
-
-    return result
+    return result[:10]
