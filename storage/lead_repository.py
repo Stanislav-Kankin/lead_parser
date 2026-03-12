@@ -25,6 +25,7 @@ def save_leads(leads: Iterable[dict]) -> int:
                 is_icp=item.get("is_icp", False),
                 icp_reason=item.get("icp_reason"),
                 hypothesis=item.get("hypothesis"),
+                title=item.get("title"),
             )
             session.add(lead)
             saved += 1

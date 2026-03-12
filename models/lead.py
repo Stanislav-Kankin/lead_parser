@@ -17,4 +17,5 @@ class Lead(Base):
     is_icp = Column(Boolean, nullable=False, default=False)
     icp_reason = Column(String, nullable=True)
     hypothesis = Column(String, nullable=True)
+    title = Column(String, nullable=True)
     created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
