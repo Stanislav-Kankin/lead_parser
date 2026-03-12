@@ -26,7 +26,11 @@ class Lead(Base):
     title = Column(String, nullable=True)
 
     company_inn = Column(String, nullable=True)
+    company_ogrn = Column(String, nullable=True)
     company_legal_name = Column(String, nullable=True)
+    legal_form = Column(String, nullable=True)
+    inn_source = Column(String, nullable=True)
+
     company_email = Column(String, nullable=True)
     company_phone = Column(String, nullable=True)
     employees = Column(String, nullable=True)

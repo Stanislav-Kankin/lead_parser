@@ -18,7 +18,10 @@ REQUIRED_COLUMNS = {
     "lead_type": "ALTER TABLE leads ADD COLUMN lead_type VARCHAR",
     "priority": "ALTER TABLE leads ADD COLUMN priority VARCHAR",
     "company_inn": "ALTER TABLE leads ADD COLUMN company_inn VARCHAR",
+    "company_ogrn": "ALTER TABLE leads ADD COLUMN company_ogrn VARCHAR",
     "company_legal_name": "ALTER TABLE leads ADD COLUMN company_legal_name VARCHAR",
+    "legal_form": "ALTER TABLE leads ADD COLUMN legal_form VARCHAR",
+    "inn_source": "ALTER TABLE leads ADD COLUMN inn_source VARCHAR",
     "company_email": "ALTER TABLE leads ADD COLUMN company_email VARCHAR",
     "company_phone": "ALTER TABLE leads ADD COLUMN company_phone VARCHAR",
     "employees": "ALTER TABLE leads ADD COLUMN employees VARCHAR",
@@ -53,7 +56,7 @@ def _ensure_columns():
         conn.execute(text("UPDATE leads SET root_domain = COALESCE(root_domain, domain)"))
         conn.execute(text("UPDATE leads SET has_contacts = CASE WHEN company_email IS NOT NULL OR company_phone IS NOT NULL THEN 1 ELSE COALESCE(has_contacts, 0) END"))
         conn.execute(text("UPDATE leads SET sales_ready = CASE WHEN COALESCE(is_icp, 0) = 1 AND COALESCE(has_contacts, 0) = 1 THEN 1 ELSE 0 END"))
-        conn.execute(text("UPDATE leads SET contact_confidence = COALESCE(contact_confidence, CASE WHEN company_inn IS NOT NULL THEN 'high' WHEN company_email IS NOT NULL OR company_phone IS NOT NULL THEN 'medium' ELSE 'low' END)"))
+        conn.execute(text("UPDATE leads SET contact_confidence = COALESCE(contact_confidence, CASE WHEN company_inn IS NOT NULL OR company_legal_name IS NOT NULL THEN 'high' WHEN company_email IS NOT NULL AND company_phone IS NOT NULL THEN 'medium' WHEN company_email IS NOT NULL OR company_phone IS NOT NULL THEN 'low' ELSE 'low' END)"))
 
 
 def init_db():

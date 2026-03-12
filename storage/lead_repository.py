@@ -45,7 +45,10 @@ def save_leads(leads: Iterable[dict]) -> dict:
                 "priority": item.get("priority"),
                 "title": item.get("title"),
                 "company_inn": item.get("company_inn"),
+                "company_ogrn": item.get("company_ogrn"),
                 "company_legal_name": item.get("company_legal_name"),
+                "legal_form": item.get("legal_form"),
+                "inn_source": item.get("inn_source"),
                 "company_email": item.get("company_email"),
                 "company_phone": item.get("company_phone"),
                 "employees": item.get("employees"),
@@ -70,6 +73,7 @@ def save_leads(leads: Iterable[dict]) -> dict:
         session.commit()
 
     return {"created": created, "updated": updated}
+
 
 
 def get_last_leads(limit: int = 10, only_with_contacts: bool = True) -> list[Lead]:
@@ -97,9 +101,12 @@ def get_last_leads(limit: int = 10, only_with_contacts: bool = True) -> list[Lea
         return list(session.execute(stmt).scalars().all())
 
 
+
 def _contact_confidence(item: dict) -> str:
     if item.get("company_inn") or item.get("company_legal_name"):
         return "high"
-    if item.get("company_email") or item.get("company_phone"):
+    if item.get("company_email") and item.get("company_phone"):
         return "medium"
+    if item.get("company_email") or item.get("company_phone"):
+        return "low"
     return "low"

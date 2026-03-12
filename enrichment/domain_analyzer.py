@@ -1,4 +1,6 @@
 import re
+from typing import Iterable
+from urllib.parse import urljoin
 
 import httpx
 from bs4 import BeautifulSoup
@@ -7,8 +9,25 @@ from utils.domain_normalizer import normalize_domain
 
 EMAIL_RE = re.compile(r"[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}", re.IGNORECASE)
 PHONE_RE = re.compile(r"(?:\+?7|8)[\s\-()]*\d[\d\s\-()]{8,}")
-BAD_EMAIL_PARTS = {"example.com", "email.com", "noreply", "no-reply", "sentry", "test@", "rating@", "info@example"}
+INN_RE = re.compile(r"(?:инн|inn)\s*[:№#]?\s*(\d{10}|\d{12})", re.IGNORECASE)
+OGRN_RE = re.compile(r"(?:огрн|ogrn)\s*[:№#]?\s*(\d{13}|\d{15})", re.IGNORECASE)
+LEGAL_NAME_RE = re.compile(
+    r"\b((?:ООО|АО|ПАО|ЗАО|ИП)\s*[«\"]?[^\n\r\t<>]{2,120})",
+    re.IGNORECASE,
+)
+
+BAD_EMAIL_PARTS = {
+    "example.com",
+    "email.com",
+    "noreply",
+    "no-reply",
+    "sentry",
+    "test@",
+    "rating@",
+    "info@example",
+}
 BAD_PHONE_VALUES = {"0000000000", "1111111111", "1234567890", "1010101010", "8000000000"}
+PREFERRED_PATHS = ["", "/contacts", "/contact", "/about", "/o-kompanii", "/company", "/rekvizity", "/privacy", "/policy"]
 
 
 async def analyze_domain(domain: str) -> dict:
@@ -16,7 +35,6 @@ async def analyze_domain(domain: str) -> dict:
     if not normalized:
         return _empty_result()
 
-    variants = [f"https://{normalized}", f"http://{normalized}"]
     headers = {
         "User-Agent": (
             "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
@@ -25,43 +43,76 @@ async def analyze_domain(domain: str) -> dict:
         )
     }
 
-    timeout = httpx.Timeout(10.0, connect=4.0)
+    timeout = httpx.Timeout(12.0, connect=4.0)
+    aggregate = _empty_result()
+    aggregate["parsed_pages"] = []
+
     async with httpx.AsyncClient(timeout=timeout, follow_redirects=True, headers=headers, verify=False) as client:
-        for url in variants:
+        base_url = await _resolve_base_url(client, normalized)
+        if not base_url:
+            return aggregate
+
+        for path in PREFERRED_PATHS:
+            url = urljoin(base_url, path)
             try:
                 response = await client.get(url)
                 response.raise_for_status()
-                soup = BeautifulSoup(response.text, "lxml")
-
-                title = soup.title.get_text(" ", strip=True)[:200] if soup.title else None
-                description = None
-                meta_desc = soup.find("meta", attrs={"name": "description"})
-                if meta_desc and meta_desc.get("content"):
-                    description = meta_desc["content"].strip()[:320]
-
-                h1 = None
-                h1_tag = soup.find("h1")
-                if h1_tag:
-                    h1 = h1_tag.get_text(" ", strip=True)[:200]
-
-                text = soup.get_text(" ", strip=True)
-                text = re.sub(r"\s+", " ", text)[:6000]
-
-                email = _extract_email(response.text)
-                phone = _extract_phone(text or response.text)
-
-                return {
-                    "title": title,
-                    "description": description,
-                    "h1": h1,
-                    "text": text,
-                    "email": email,
-                    "phone": phone,
-                }
             except Exception:
                 continue
 
-    return _empty_result()
+            page = _parse_page(response.text)
+            aggregate["parsed_pages"].append(url)
+            aggregate = _merge_result(aggregate, page)
+
+    return aggregate
+
+
+async def _resolve_base_url(client: httpx.AsyncClient, domain: str) -> str | None:
+    for variant in [f"https://{domain}", f"http://{domain}"]:
+        try:
+            response = await client.get(variant)
+            response.raise_for_status()
+            return str(response.url)
+        except Exception:
+            continue
+    return None
+
+
+def _parse_page(html: str) -> dict:
+    soup = BeautifulSoup(html, "lxml")
+
+    title = soup.title.get_text(" ", strip=True)[:200] if soup.title else None
+    description = None
+    meta_desc = soup.find("meta", attrs={"name": "description"})
+    if meta_desc and meta_desc.get("content"):
+        description = meta_desc["content"].strip()[:320]
+
+    h1 = None
+    h1_tag = soup.find("h1")
+    if h1_tag:
+        h1 = h1_tag.get_text(" ", strip=True)[:200]
+
+    text = soup.get_text(" ", strip=True)
+    text = re.sub(r"\s+", " ", text)[:10000]
+
+    inn = _extract_first(INN_RE, text)
+    ogrn = _extract_first(OGRN_RE, text)
+    legal_name = _extract_legal_name(text)
+    legal_form = _extract_legal_form(legal_name)
+
+    return {
+        "title": title,
+        "description": description,
+        "h1": h1,
+        "text": text,
+        "email": _extract_email(html),
+        "phone": _extract_phone(text or html),
+        "company_inn": inn,
+        "company_ogrn": ogrn,
+        "company_legal_name": legal_name,
+        "legal_form": legal_form,
+        "inn_source": "site_requisites" if inn or legal_name else None,
+    }
 
 
 def _empty_result() -> dict:
@@ -72,21 +123,94 @@ def _empty_result() -> dict:
         "text": "",
         "email": None,
         "phone": None,
+        "company_inn": None,
+        "company_ogrn": None,
+        "company_legal_name": None,
+        "legal_form": None,
+        "inn_source": None,
     }
+
+
+def _merge_result(base: dict, page: dict) -> dict:
+    for key in [
+        "title",
+        "description",
+        "h1",
+        "email",
+        "phone",
+        "company_inn",
+        "company_ogrn",
+        "company_legal_name",
+        "legal_form",
+        "inn_source",
+    ]:
+        if not base.get(key) and page.get(key):
+            base[key] = page[key]
+
+    merged_text = " ".join(part for part in [base.get("text"), page.get("text")] if part)
+    base["text"] = merged_text[:12000]
+    return base
+
+
+def _extract_first(pattern: re.Pattern, text: str | None) -> str | None:
+    if not text:
+        return None
+    match = pattern.search(text)
+    if not match:
+        return None
+    value = match.group(1).strip()
+    return value or None
+
+
+def _extract_legal_name(text: str | None) -> str | None:
+    if not text:
+        return None
+    for match in LEGAL_NAME_RE.finditer(text):
+        value = re.sub(r"\s+", " ", match.group(1)).strip(" .,-;:")
+        if len(value) < 4:
+            continue
+        if "политик" in value.lower() or "конфиденц" in value.lower():
+            continue
+        return value[:140]
+    return None
+
+
+def _extract_legal_form(legal_name: str | None) -> str | None:
+    if not legal_name:
+        return None
+    upper = legal_name.upper()
+    for form in ["ООО", "АО", "ПАО", "ЗАО", "ИП"]:
+        if upper.startswith(form):
+            return form
+    return None
 
 
 def _extract_email(text: str | None) -> str | None:
     if not text:
         return None
 
-    for match in EMAIL_RE.findall(text):
+    matches = EMAIL_RE.findall(text)
+    ranked = sorted(matches, key=_email_rank, reverse=True)
+    for match in ranked:
         email = match.strip().lower()
         if any(bad in email for bad in BAD_EMAIL_PARTS):
             continue
-        if email.endswith(('.png', '.jpg', '.jpeg', '.svg', '.webp', '.gif')):
+        if email.endswith((".png", ".jpg", ".jpeg", ".svg", ".webp", ".gif")):
             continue
         return email
     return None
+
+
+def _email_rank(email: str) -> int:
+    lowered = email.lower()
+    score = 0
+    if any(prefix in lowered for prefix in ["info@", "sales@", "hello@", "opt@", "b2b@", "zakaz@"]):
+        score += 3
+    if any(prefix in lowered for prefix in ["support@", "admin@", "office@"]):
+        score += 1
+    if lowered.endswith("@gmail.com") or lowered.endswith("@mail.ru") or lowered.endswith("@yandex.ru"):
+        score -= 1
+    return score
 
 
 def _extract_phone(text: str | None) -> str | None:

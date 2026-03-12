@@ -75,7 +75,10 @@ async def last_leads(callback: CallbackQuery):
                     "hypothesis": lead.hypothesis,
                     "opener": lead.opener,
                     "company_inn": lead.company_inn,
+                    "company_ogrn": lead.company_ogrn,
                     "company_legal_name": lead.company_legal_name,
+                    "legal_form": lead.legal_form,
+                    "inn_source": lead.inn_source,
                     "company_email": lead.company_email,
                     "company_phone": lead.company_phone,
                     "contacts_source": lead.contacts_source,
@@ -170,10 +173,13 @@ async def handle_query(message: Message):
         if icp["is_icp"] or icp["priority"] in {"high", "medium"}:
             helper_data = await get_company_by_domain(domain)
 
-        company_email = _pick_value(helper_data, "email") or analysis.get("email")
-        company_phone = _pick_value(helper_data, "phone") or analysis.get("phone")
-        company_inn = _pick_value(helper_data, "inn")
-        company_legal_name = _pick_value(helper_data, "legal_name")
+        company_email = analysis.get("email") or _pick_value(helper_data, "email")
+        company_phone = analysis.get("phone") or _pick_value(helper_data, "phone")
+        company_inn = analysis.get("company_inn")
+        company_ogrn = analysis.get("company_ogrn")
+        company_legal_name = analysis.get("company_legal_name")
+        legal_form = analysis.get("legal_form")
+        inn_source = analysis.get("inn_source")
         has_contacts = bool(company_email or company_phone)
 
         if not has_contacts:
@@ -197,7 +203,10 @@ async def handle_query(message: Message):
             "hypothesis": hypothesis,
             "opener": opener,
             "company_inn": company_inn,
+            "company_ogrn": company_ogrn,
             "company_legal_name": company_legal_name,
+            "legal_form": legal_form,
+            "inn_source": inn_source,
             "company_email": company_email,
             "company_phone": company_phone,
             "employees": _pick_value(helper_data, "employees"),
@@ -258,6 +267,7 @@ async def handle_query(message: Message):
     SEARCH_RESULTS_CACHE[sent.message_id] = display_items
 
 
+
 def format_lead_card(idx: int, lead: dict) -> str:
     return (
         f"<b>{idx}. {escape_html(lead.get('domain') or '-')}</b>\n"
@@ -270,11 +280,15 @@ def format_lead_card(idx: int, lead: dict) -> str:
         f"<b>Email:</b> {escape_html(lead.get('company_email') or '-')}\n"
         f"<b>Телефон:</b> {escape_html(lead.get('company_phone') or '-')}\n"
         f"<b>ИНН:</b> {escape_html(lead.get('company_inn') or '-')}\n"
+        f"<b>ОГРН:</b> {escape_html(lead.get('company_ogrn') or '-')}\n"
         f"<b>Юр. лицо:</b> {escape_html(_short(lead.get('company_legal_name') or '-', 120))}\n"
+        f"<b>Форма:</b> {escape_html(lead.get('legal_form') or '-')}\n"
+        f"<b>Источник ИНН:</b> {escape_html(_ru_inn_source(lead.get('inn_source')))}\n"
         f"<b>Источник контакта:</b> {escape_html(lead.get('contacts_source') or '-')}\n"
         f"<b>Надёжность контакта:</b> {escape_html(_ru_confidence(lead.get('contact_confidence')))}\n"
         f"<b>Причина:</b> {escape_html(_short(lead.get('icp_reason') or '-', 220))}"
     )
+
 
 
 def _pick_value(data: dict | None, key: str) -> str | None:
@@ -287,15 +301,22 @@ def _pick_value(data: dict | None, key: str) -> str | None:
     return value or None
 
 
+
 def _build_contacts_source(helper_data: dict | None, analysis: dict) -> str:
-    if helper_data and (helper_data.get("email") or helper_data.get("phone")):
+    has_site = bool(analysis.get("email") or analysis.get("phone"))
+    has_helper = bool(helper_data and (helper_data.get("email") or helper_data.get("phone")))
+
+    if has_site and has_helper:
+        return "site + helper_api"
+    if has_site:
+        return "site"
+    if has_helper:
         strategy = helper_data.get("lookup_strategy")
         if strategy == "root_domain":
             return "helper_api (root domain)"
         return "helper_api"
-    if analysis.get("email") or analysis.get("phone"):
-        return "site"
     return "-"
+
 
 
 def _get_contact_confidence(inn: str | None, legal_name: str | None, email: str | None, phone: str | None) -> str:
@@ -308,6 +329,7 @@ def _get_contact_confidence(inn: str | None, legal_name: str | None, email: str 
     return "low"
 
 
+
 def _parse_page(payload: str | None) -> int:
     try:
         return max(0, int((payload or "").split(":", 1)[1]))
@@ -315,8 +337,10 @@ def _parse_page(payload: str | None) -> int:
         return 0
 
 
+
 def _short(value: str, limit: int = 140) -> str:
     return value if len(value) <= limit else value[: limit - 1] + "…"
+
 
 
 def _ru_lead_type(value: str | None) -> str:
@@ -328,14 +352,23 @@ def _ru_lead_type(value: str | None) -> str:
     return mapping.get(value or "", value or "-")
 
 
+
 def _ru_priority(value: str | None) -> str:
     mapping = {"high": "Высокий", "medium": "Средний", "low": "Низкий"}
     return mapping.get(value or "", value or "-")
 
 
+
 def _ru_confidence(value: str | None) -> str:
     mapping = {"high": "Высокая", "medium": "Средняя", "low": "Низкая"}
     return mapping.get(value or "", value or "-")
+
+
+
+def _ru_inn_source(value: str | None) -> str:
+    mapping = {"site_requisites": "Сайт / реквизиты"}
+    return mapping.get(value or "", value or "-")
+
 
 
 def escape_html(value: str) -> str:
