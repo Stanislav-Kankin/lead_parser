@@ -12,6 +12,7 @@ from telegram_signals.repository import (
     get_review_leads,
     get_signals,
     get_target_leads,
+    get_market_intelligence,
 )
 
 
@@ -39,6 +40,10 @@ def export_signals_to_xlsx(kind: str = "actionable") -> Path:
         items = get_signals(limit=None)
         suffix = "raw"
         title = "raw_signals"
+    elif kind == "market":
+        items = get_market_intelligence()
+        suffix = "market"
+        title = "market_intelligence"
     elif kind == "target":
         items = get_target_leads()
         suffix = "target"

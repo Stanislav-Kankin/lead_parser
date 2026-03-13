@@ -111,3 +111,21 @@ def get_discussion_leads(segment: str | None = None, limit: int | None = None) -
 
 def get_business_like_messages(segment: str | None = None, limit: int | None = None) -> list[TelegramSignal]:
     return get_signals(segment=segment, limit=limit, business_only=True, lead_fit_in=["target", "review"])
+
+
+def get_market_intelligence(segment: str | None = None, limit: int | None = None) -> list[TelegramSignal]:
+    with SessionLocal() as session:
+        stmt = select(TelegramSignal)
+        if segment:
+            stmt = stmt.where(TelegramSignal.segment == segment)
+        stmt = stmt.where(
+            TelegramSignal.message_type.in_(["expert_content", "market_intelligence"]),
+        )
+        stmt = stmt.order_by(
+            desc(TelegramSignal.final_lead_score),
+            desc(TelegramSignal.message_date),
+            desc(TelegramSignal.created_at),
+        )
+        if limit:
+            stmt = stmt.limit(limit)
+        return list(session.execute(stmt).scalars().all())

@@ -26,7 +26,7 @@ def telegram_signals_menu() -> InlineKeyboardMarkup:
             [InlineKeyboardButton(text="🏢 Похожи на бизнес", callback_data="tg_business:0:all")],
             [
                 InlineKeyboardButton(text="📤 Excel лиды", callback_data="tg_export:actionable"),
-                InlineKeyboardButton(text="📤 Excel raw", callback_data="tg_export:raw"),
+                InlineKeyboardButton(text="📤 Excel рынок", callback_data="tg_export:market"),
             ],
         ]
     )

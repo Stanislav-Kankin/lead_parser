@@ -18,6 +18,7 @@ from telegram_signals.exporter import export_signals_to_xlsx
 from telegram_signals.repository import (
     get_business_like_messages,
     get_discussion_leads,
+    get_market_intelligence,
     get_review_leads,
     get_signals,
     get_target_leads,
@@ -84,13 +85,13 @@ def _parse_segment_page(callback_data: str) -> tuple[str | None, int]:
     _, second, third = parts
 
     # Supported formats:
-    # 1) prefix:{page}:{segment}       -> tg_targets:0:all
-    # 2) prefix:{segment}:{page}       -> tg_targets:all:0
+    # 1) prefix:{page}:{segment}
+    # 2) prefix:{segment}:{page}
     if second.isdigit():
         page_raw, segment = second, third
     elif third.isdigit():
         segment, page_raw = second, third
-    elif second == "all" and not third.isdigit():
+    elif second == "all":
         page_raw, segment = "0", third
     else:
         page_raw, segment = second, third
@@ -153,18 +154,8 @@ async def tg_collect(callback: CallbackQuery):
         )
         return
 
-    target_count = len(get_target_leads(segment=segment, limit=None))
-    review_count = len(get_review_leads(segment=segment, limit=None))
-    discussion_count = len(get_discussion_leads(segment=segment, limit=None))
-    business_count = len(get_business_like_messages(segment=segment, limit=None))
-
     await callback.message.answer(
-        "Поиск завершён. "
-        f"Создано: <b>{result['created']}</b>, обновлено: <b>{result['updated']}</b>.\n"
-        f"<b>Целевые:</b> {target_count} | "
-        f"<b>На проверку:</b> {review_count} | "
-        f"<b>Обсуждения:</b> {discussion_count} | "
-        f"<b>Business-like:</b> {business_count}",
+        f"Поиск завершён. Создано: <b>{result['created']}</b>, обновлено: <b>{result['updated']}</b>.",
         parse_mode="HTML",
         reply_markup=telegram_signals_menu(),
     )
@@ -196,13 +187,13 @@ async def tg_targets(callback: CallbackQuery):
     segment_filter, page = _parse_segment_page(callback.data or "")
     items = get_target_leads(segment=segment_filter, limit=None)
     if not items:
-        await _send_or_edit(callback, "Пока целевых лидов нет. Сначала запусти поиск по сегменту.", reply_markup=telegram_signals_menu())
+        await _send_or_edit(callback, "Пока живых болей нет. Сначала запусти поиск по сегменту.", reply_markup=telegram_signals_menu())
         await callback.answer()
         return
 
     total_pages = max(1, math.ceil(len(items) / PAGE_SIZE))
     page = min(page, total_pages - 1)
-    text = _build_signal_page("Целевые лиды", items, page, total_pages, _ru_segment(segment_filter or "all"))
+    text = _build_signal_page("Живые боли", items, page, total_pages, _ru_segment(segment_filter or "all"))
 
     await _send_or_edit(
         callback,
@@ -295,6 +286,27 @@ async def tg_business(callback: CallbackQuery):
     )
     await callback.answer()
 
+
+
+@router.callback_query(F.data.startswith("tg_market:"))
+async def tg_market(callback: CallbackQuery):
+    segment_filter, page = _parse_segment_page(callback.data or "")
+    items = get_market_intelligence(segment=segment_filter, limit=None)
+    if not items:
+        await _send_or_edit(callback, "Пока рыночных гипотез нет. Сначала запусти поиск по сегменту.", reply_markup=telegram_signals_menu())
+        await callback.answer()
+        return
+
+    total_pages = max(1, math.ceil(len(items) / PAGE_SIZE))
+    page = min(page, total_pages - 1)
+    text = _build_signal_page("Рынок / гипотезы", items, page, total_pages, _ru_segment(segment_filter or "all"))
+
+    await _send_or_edit(
+        callback,
+        text,
+        reply_markup=pagination_keyboard("tg_market", page, total_pages, extra=(segment_filter or "all")),
+    )
+    await callback.answer()
 
 @router.callback_query(F.data.startswith("tg_export:"))
 async def tg_export(callback: CallbackQuery):
@@ -679,10 +691,10 @@ def _ru_signal_level(value: str | None) -> str:
 
 def _ru_lead_fit(value: str | None) -> str:
     mapping = {
-        "target": "Целевой",
+        "target": "Живая боль",
         "review": "На проверку",
         "contractor": "Подрядчик",
-        "noise": "Шум",
+        "noise": "Шум/рынок",
     }
     return mapping.get(value or "", value or "-")
 

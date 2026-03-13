@@ -13,6 +13,75 @@ from telegram_signals.keywords import (
 )
 
 
+FIRST_PERSON_PAIN_PATTERNS = [
+    "у нас",
+    "мы ищем",
+    "ищем подрядчика",
+    "ищем агентство",
+    "нужен подрядчик",
+    "нужен маркетолог",
+    "посоветуйте",
+    "кто работал",
+    "кто реально",
+    "не окупается",
+    "не сходится",
+    "маржа падает",
+    "комиссия съедает",
+    "хотим свой сайт",
+    "хотим direct",
+    "нужен сайт",
+    "зависим от wb",
+    "зависим от ozon",
+    "как уйти",
+]
+
+EXPERT_CONTENT_PATTERNS = [
+    "что нужно знать",
+    "вот мой ответ",
+    "разбер",
+    "в этой статье",
+    "я написал",
+    "сегодня поговорим",
+    "объясняю",
+    "рассказываю",
+    "кейс",
+    "подкаст",
+    "видео",
+    "новость",
+]
+
+MARKET_OBSERVATION_PATTERNS = [
+    "рынок",
+    "повышает комиссии",
+    "маркетплейсы зачищают",
+    "государство",
+    "аналитика",
+    "исследование",
+    "новый закон",
+    "новые правила",
+]
+
+SUPPLIER_AD_PATTERNS = [
+    "отгрузка оптом",
+    "со склада",
+    "цена с ндс",
+    "разные вкусы",
+    "в наличии",
+    "минимальный заказ",
+    "прайс",
+    "оптовики",
+    "поставщики",
+]
+
+CHANNEL_AUTHOR_PATTERNS = [
+    "подписывайтесь",
+    "в канале",
+    "в следующем посте",
+    "в комментариях",
+    "поставьте реакцию",
+]
+
+
 def _contains_any(text_l: str, keywords: list[str]) -> list[str]:
     return [kw for kw in keywords if kw in text_l]
 
@@ -68,31 +137,17 @@ def _guess_conversation_type(text_l: str, has_intent: bool, has_pain: bool, auth
 def build_recommended_opener(text_l: str, message_type: str, lead_fit: str) -> str:
     if lead_fit == "target":
         return (
-            "Вижу, что здесь есть реальный бизнесовый сигнал. "
-            "Я бы заходил не с каналами, а с короткой гипотезой: где маркетинг не доходит до денег, "
+            "Здесь лучше заходить через короткую гипотезу по экономике: где маркетинг не доходит до денег, "
             "как снизить зависимость от маркетплейсов и собрать управляемый direct-канал."
         )
-    if message_type == "pain":
+    if lead_fit == "review":
         return (
-            "Вижу, что у вас обсуждается экономика канала и зависимость от маркетплейсов. "
-            "В таких кейсах имеет смысл заходить не с рекламой как таковой, а с гипотезой по direct-каналу и ROMI."
+            "Сначала доресерчить компанию и роль автора. Если это реальный бренд/селлер, "
+            "заходить через гипотезу роста direct и контроля ROMI."
         )
-    if message_type == "need_contractor":
-        return (
-            "Вижу запрос на решение или подрядчика. "
-            "Тут можно заходить через короткую гипотезу: где маркетинг не доходит до денег и как собрать управляемый direct-канал."
-        )
-    if message_type == "direct_growth":
-        return (
-            "Похоже, у компании есть интерес к своему сайту и direct. "
-            "Тут уместен заход через рост продаж в собственном канале и снижение зависимости от маркетплейсов."
-        )
-    if message_type == "brand_signal":
-        return (
-            "Вижу признаки бренда/производства. "
-            "Уместен заход через рост собственного канала продаж и контроль экономики маркетинга."
-        )
-    return "Есть релевантный e-commerce сигнал. Нужен аккуратный ручной разбор."
+    if message_type == "market_intelligence":
+        return "Это скорее сигнал рынка и источник гипотез для аутрича, а не прямой лид."
+    return "Нужен аккуратный ручной разбор."
 
 
 def _build_lead_fit(
@@ -100,30 +155,27 @@ def _build_lead_fit(
     message_type: str,
     author_type_guess: str,
     signal_score: int,
-    pain_hits: list[str],
-    intent_hits: list[str],
-    direct_hits: list[str],
-    brand_hits: list[str],
+    first_person_pain_score: int,
     contactability_score: int,
 ) -> tuple[str, str]:
-    if message_type in {"service_ad", "vacancy"} or author_type_guess == "contractor":
+    if message_type in {"service_ad", "vacancy", "supplier_ad"} or author_type_guess == "contractor":
         return "contractor", "ignore"
 
-    has_business_signal = bool(pain_hits or intent_hits or direct_hits or brand_hits)
-
-    if (
-        message_type in {"pain", "need_contractor", "direct_growth", "brand_signal"}
-        and has_business_signal
-        and signal_score >= 8
-    ):
-        if pain_hits or intent_hits or direct_hits:
-            if contactability_score >= 1:
-                return "target", "outreach_now"
-            return "review", "research_company"
+    if message_type == "self_pain":
+        if contactability_score >= 1 and signal_score >= 10:
+            return "target", "outreach_now"
         return "review", "research_company"
 
-    if has_business_signal and signal_score >= 5:
-        return "review", "manual_review"
+    if message_type == "peer_question":
+        if signal_score >= 8:
+            return "review", "research_company"
+        return "noise", "ignore"
+
+    if message_type in {"expert_content", "market_intelligence"}:
+        return "noise", "ignore"
+
+    if first_person_pain_score >= 2 and signal_score >= 8:
+        return "review", "research_company"
 
     return "noise", "ignore"
 
@@ -142,6 +194,7 @@ def classify_signal(
     text_l = text.lower()
     context_l = context_text.lower()
     full_l = f"{text_l}\n{context_l}"
+    chat_title_l = (chat_title or "").lower()
 
     pain_hits = _contains_any(full_l, PAIN_KEYWORDS)
     intent_hits = _contains_any(full_l, INTENT_KEYWORDS)
@@ -151,37 +204,59 @@ def classify_signal(
 
     author_type_guess, owner_likelihood_score, contractor_penalty = _guess_author_type(full_l)
 
-    pain_score = len(pain_hits) * 3
+    first_person_hits = [p for p in FIRST_PERSON_PAIN_PATTERNS if p in full_l]
+    expert_hits = [p for p in EXPERT_CONTENT_PATTERNS if p in full_l]
+    market_hits = [p for p in MARKET_OBSERVATION_PATTERNS if p in full_l]
+    supplier_hits = [p for p in SUPPLIER_AD_PATTERNS if p in full_l]
+    channel_hits = [p for p in CHANNEL_AUTHOR_PATTERNS if p in full_l]
+
+    first_person_pain_score = len(first_person_hits) * 4
+    pain_score = len(pain_hits) * 3 + first_person_pain_score
     intent_score = len(intent_hits) * 4
     icp_score = len(direct_hits) * 2 + len(brand_hits) * 2
+
     context_score = 2 if context_text.strip() else 0
     if any(x in context_l for x in ["кто посоветует", "посоветуйте", "не окупается", "ищем", "у нас", "кто работал", "подскажите", "есть ли смысл"]):
         context_score += 2
 
     promo_penalty = 0
     if any(x in text_l for x in ["напишите в лс", "есть кейсы", "помогаем", "делаем под ключ", "инфографика", "дизайн карточек"]):
-        promo_penalty += 5
+        promo_penalty += 6
+    promo_penalty += len(expert_hits) * 2
+    promo_penalty += len(channel_hits) * 2
 
+    if "рекламщик" in chat_title_l or "capital" in chat_title_l or "ecommerce" in chat_title_l:
+        promo_penalty += 3
+
+    # Message type v6: content-centric posts should stop becoming target leads
     if noise_hits:
         message_type = "noise"
     elif "вакан" in full_l or "резюме" in full_l:
         message_type = "vacancy"
+    elif supplier_hits:
+        message_type = "supplier_ad"
     elif author_type_guess == "contractor" and not pain_hits and not intent_hits:
         message_type = "service_ad"
-    elif intent_hits:
-        message_type = "need_contractor"
-    elif direct_hits:
-        message_type = "direct_growth"
-    elif pain_hits:
-        message_type = "pain"
-    elif brand_hits:
-        message_type = "brand_signal"
+    elif first_person_hits and (pain_hits or intent_hits or direct_hits):
+        message_type = "self_pain"
+    elif any(x in full_l for x in ["кто посоветует", "посоветуйте", "кто работал", "подскажите", "есть ли смысл"]):
+        message_type = "peer_question"
+    elif expert_hits:
+        message_type = "expert_content"
+    elif market_hits and not first_person_hits:
+        message_type = "market_intelligence"
+    elif intent_hits and first_person_hits:
+        message_type = "self_pain"
+    elif direct_hits and first_person_hits:
+        message_type = "self_pain"
+    elif pain_hits and first_person_hits:
+        message_type = "self_pain"
     else:
         message_type = "noise"
 
     conversation_type = _guess_conversation_type(full_l, bool(intent_hits), bool(pain_hits), author_type_guess)
 
-    matched = pain_hits + intent_hits + direct_hits + brand_hits
+    matched = pain_hits + intent_hits + direct_hits + brand_hits + first_person_hits
     seen = []
     matched_keywords = []
     for kw in matched:
@@ -208,11 +283,11 @@ def classify_signal(
 
     segment_bonus = 0
     if segment == "ecom_marketplace_pain" and any(x in full_l for x in ["wildberries", "wb", "ozon", "маркетплейс"]):
-        segment_bonus += 3
+        segment_bonus += 2
     if segment == "ecom_direct_growth" and direct_hits:
-        segment_bonus += 3
+        segment_bonus += 2
     if segment == "manufacturer_secondary" and brand_hits:
-        segment_bonus += 3
+        segment_bonus += 2
 
     final_lead_score = (
         icp_score
@@ -239,15 +314,14 @@ def classify_signal(
         message_type=message_type,
         author_type_guess=author_type_guess,
         signal_score=signal_score,
-        pain_hits=pain_hits,
-        intent_hits=intent_hits,
-        direct_hits=direct_hits,
-        brand_hits=brand_hits,
+        first_person_pain_score=first_person_pain_score,
         contactability_score=contactability_score,
     )
     is_actionable = lead_fit == "target"
 
     reasons = []
+    if first_person_hits:
+        reasons.append("есть first-person сигнал боли/запроса")
     if pain_hits:
         reasons.append("есть боль по экономике/зависимости")
     if intent_hits:
@@ -260,12 +334,16 @@ def classify_signal(
         reasons.append("текст больше похож на бизнес, чем на подрядчика")
     if context_score >= 2:
         reasons.append("есть контекст обсуждения")
+    if expert_hits:
+        reasons.append("похоже на экспертный/контентный пост")
+    if market_hits and not first_person_hits:
+        reasons.append("похоже на наблюдение о рынке, а не свою боль")
     if contactability_score >= 3:
         reasons.append("есть прямой контакт автора")
     elif contactability_score >= 1:
         reasons.append("есть хотя бы косвенный канал контакта")
 
-    why = "; ".join(reasons[:4])
+    why = "; ".join(reasons[:5])
 
     return {
         "matched_keywords": ",".join(matched_keywords),
