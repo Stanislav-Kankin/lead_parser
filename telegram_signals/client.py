@@ -1,5 +1,8 @@
 import os
+from dotenv import load_dotenv
 from telethon import TelegramClient
+
+load_dotenv()
 
 
 def get_client():
@@ -7,6 +10,7 @@ def get_client():
     api_hash = os.getenv("TELEGRAM_API_HASH")
     session_name = os.getenv("TELEGRAM_SESSION_NAME", "tg_signal_session")
 
-    client = TelegramClient(session_name, api_id, api_hash)
+    if not api_id or not api_hash:
+        raise RuntimeError("Не заданы TELEGRAM_API_ID / TELEGRAM_API_HASH в .env")
 
-    return client
+    return TelegramClient(session_name, api_id, api_hash)
