@@ -80,12 +80,26 @@ def _parse_segment_page(callback_data: str) -> tuple[str | None, int]:
     parts = (callback_data or "").split(":")
     if len(parts) != 3:
         return None, 0
+
     _, second, third = parts
-    if second.isdigit() or second == "all":
+
+    # Supported formats:
+    # 1) prefix:{page}:{segment}       -> tg_targets:0:all
+    # 2) prefix:{segment}:{page}       -> tg_targets:all:0
+    if second.isdigit():
         page_raw, segment = second, third
-    else:
+    elif third.isdigit():
         segment, page_raw = second, third
-    page = 0 if page_raw == "all" else max(0, int(page_raw))
+    elif second == "all" and not third.isdigit():
+        page_raw, segment = "0", third
+    else:
+        page_raw, segment = second, third
+
+    try:
+        page = max(0, int(page_raw))
+    except Exception:
+        page = 0
+
     segment_filter = None if segment == "all" else segment
     return segment_filter, page
 
@@ -139,8 +153,18 @@ async def tg_collect(callback: CallbackQuery):
         )
         return
 
+    target_count = len(get_target_leads(segment=segment, limit=None))
+    review_count = len(get_review_leads(segment=segment, limit=None))
+    discussion_count = len(get_discussion_leads(segment=segment, limit=None))
+    business_count = len(get_business_like_messages(segment=segment, limit=None))
+
     await callback.message.answer(
-        f"Поиск завершён. Создано: <b>{result['created']}</b>, обновлено: <b>{result['updated']}</b>.",
+        "Поиск завершён. "
+        f"Создано: <b>{result['created']}</b>, обновлено: <b>{result['updated']}</b>.\n"
+        f"<b>Целевые:</b> {target_count} | "
+        f"<b>На проверку:</b> {review_count} | "
+        f"<b>Обсуждения:</b> {discussion_count} | "
+        f"<b>Business-like:</b> {business_count}",
         parse_mode="HTML",
         reply_markup=telegram_signals_menu(),
     )
