@@ -1,69 +1,66 @@
-from __future__ import annotations
-
-from .keywords import (
-    PRIMARY_ECOM_KEYWORDS,
-    PAIN_KEYWORDS,
-    INTENT_KEYWORDS,
-    MANUFACTURER_KEYWORDS,
-    NEGATIVE_KEYWORDS,
-)
+from telegram_signals.keywords import POSITIVE_KEYWORDS, INTENT_KEYWORDS, NEGATIVE_KEYWORDS
 
 
-def _contains_any(text: str, keywords: list[str]) -> list[str]:
+def _contains_any(text_l: str, keywords: list[str]) -> list[str]:
     found = []
     for kw in keywords:
-        if kw in text:
+        if kw in text_l:
             found.append(kw)
     return found
 
 
-def _segment(text: str, matches: list[str]) -> str:
-    if any(k in text for k in ["wildberries", "wb", "ozon", "маркетплейс", "маркетплейсы"]):
-        if any(k in text for k in ["свой сайт", "интернет-магазин", "direct", "d2c"]):
-            return "ecom_marketplace_pain"
-        return "ecom_marketplace_pain"
-    if any(k in matches for k in ["свой сайт", "интернет-магазин", "direct", "d2c"]):
-        return "ecom_direct_growth"
-    if any(k in matches for k in MANUFACTURER_KEYWORDS):
-        return "manufacturer_secondary"
-    return "ecom_direct_growth"
-
-
-def _opener(segment: str, text: str) -> str:
-    if segment == "ecom_marketplace_pain":
+def build_recommended_opener(text_l: str, matches: list[str]) -> str:
+    if any(x in text_l for x in ["wildberries", "wb", "ozon", "маркетплейс", "маркетплейсы"]):
         return (
-            "Вижу у вас контекст вокруг зависимости от WB/Ozon и экономики собственного сайта. "
-            "Часто в такой точке проблема не в самом трафике, а в том, что direct-канал не собран как управляемая система роста."
+            "Вижу у вас обсуждается зависимость от маркетплейсов. "
+            "У таких e-commerce брендов часто проблема не в трафике как таковом, "
+            "а в том, что собственный сайт не собран как управляемый direct-канал."
         )
-    if segment == "ecom_direct_growth":
+
+    if any(x in text_l for x in ["свой сайт", "интернет-магазин", "d2c", "direct"]):
         return (
-            "Похоже, у вас уже есть фокус на росте собственного сайта. Обычно здесь упираются в экономику привлечения и отсутствие связки между спросом, сайтом и повторными продажами."
+            "Похоже, у вас есть задача усилить продажи через собственный сайт. "
+            "Часто в такой точке основной резерв — это не просто запуск рекламы, "
+            "а сборка управляемого канала direct-продаж."
         )
+
+    if any(x in text_l for x in ["подрядчик", "агентство", "директ", "трафик"]):
+        return (
+            "Вижу запрос на подрядчика/рост канала. "
+            "Можно зайти через короткую гипотезу по экономике трафика и зависимости от маркетплейсов."
+        )
+
     return (
-        "Для производителей и брендов с собственным продуктом часто узкое место — зависимость от внешних площадок и слабый direct-канал. Можно проверить, есть ли у вас здесь точка роста."
+        "Есть сигнал, что у компании может быть задача по росту direct-продаж "
+        "или снижению зависимости от маркетплейсов."
     )
 
 
-def classify_signal(text: str) -> dict:
+def classify_signal(text: str, segment: str) -> dict:
     text_l = (text or "").lower()
 
-    primary = _contains_any(text_l, PRIMARY_ECOM_KEYWORDS)
-    pain = _contains_any(text_l, PAIN_KEYWORDS)
+    positive = _contains_any(text_l, POSITIVE_KEYWORDS)
     intent = _contains_any(text_l, INTENT_KEYWORDS)
-    manufacturer = _contains_any(text_l, MANUFACTURER_KEYWORDS)
     negative = _contains_any(text_l, NEGATIVE_KEYWORDS)
 
     score = 0
-    score += len(primary) * 2
-    score += len(pain) * 3
+    score += len(positive) * 2
     score += len(intent) * 4
-    score += len(manufacturer) * 1
     score -= len(negative) * 5
 
-    if any(k in text_l for k in ["wildberries", "wb", "ozon", "маркетплейс", "маркетплейсы"]) and any(k in text_l for k in ["комиссия", "маржа", "зависимость", "невыгодно"]):
-        score += 3
-    if any(k in text_l for k in ["свой сайт", "интернет-магазин", "direct", "d2c"]) and any(k in text_l for k in ["нужен трафик", "подрядчик", "агентство", "реклама"]):
-        score += 3
+    if segment == "ecom_marketplace_pain":
+        if any(x in text_l for x in ["wildberries", "wb", "ozon", "маркетплейс", "маркетплейсы"]):
+            score += 3
+        if any(x in text_l for x in ["комиссия", "маржа", "зависимость", "экономика"]):
+            score += 3
+
+    if segment == "ecom_direct_growth":
+        if any(x in text_l for x in ["свой сайт", "интернет-магазин", "direct", "d2c"]):
+            score += 4
+
+    if segment == "manufacturer_secondary":
+        if any(x in text_l for x in ["производитель", "бренд", "опт"]):
+            score += 3
 
     if score >= 10:
         level = "high"
@@ -72,12 +69,14 @@ def classify_signal(text: str) -> dict:
     else:
         level = "low"
 
-    matches = primary + pain + intent + manufacturer + negative
-    segment = _segment(text_l, matches)
+    matches = list(dict.fromkeys(positive + intent + negative))
+
     return {
         "score": score,
         "level": level,
         "matches": matches,
-        "segment": segment,
-        "opener": _opener(segment, text_l),
+        "recommended_opener": build_recommended_opener(text_l, matches),
+        "positive": positive,
+        "intent": intent,
+        "negative": negative,
     }

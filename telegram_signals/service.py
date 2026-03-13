@@ -1,93 +1,154 @@
-from __future__ import annotations
-
 import logging
+from typing import Any
 
-from telethon.errors import FloodWaitError
+from telethon.tl.types import Message
 
-from .client import get_client
-from .keywords import SEGMENT_QUERIES
-from .signal_classifier import classify_signal
-from .repository import save_signals
+from telegram_signals.client import get_client, search_public_chats
+from telegram_signals.keywords import CHAT_DISCOVERY_KEYWORDS
+from telegram_signals.signal_classifier import classify_signal
+from telegram_signals.repository import save_signals
+
 
 logger = logging.getLogger(__name__)
 
 
-def _peer_to_url(entity) -> str | None:
-    username = getattr(entity, "username", None)
+def _chat_url(chat: Any) -> str | None:
+    username = getattr(chat, "username", None)
     if username:
         return f"https://t.me/{username}"
     return None
 
 
-def _author_name(sender) -> str | None:
-    if not sender:
-        return None
-    first = getattr(sender, "first_name", None) or ""
-    last = getattr(sender, "last_name", None) or ""
-    full = (first + " " + last).strip()
-    return full or getattr(sender, "title", None)
+def _chat_title(chat: Any) -> str:
+    return getattr(chat, "title", None) or getattr(chat, "username", None) or str(getattr(chat, "id", "unknown"))
 
 
-async def collect_signals(segment: str, per_query_limit: int = 25) -> dict:
-    queries = SEGMENT_QUERIES.get(segment)
-    if not queries:
-        raise RuntimeError(f"Неизвестный сегмент: {segment}")
+def _author_username(message: Message) -> str | None:
+    sender = getattr(message, "sender", None)
+    if sender:
+        return getattr(sender, "username", None)
+    return None
+
+
+async def _collect_messages_from_chat(client, chat, limit_per_chat: int) -> list[Message]:
+    messages: list[Message] = []
+
+    async for msg in client.iter_messages(chat, limit=limit_per_chat):
+        if not msg or not getattr(msg, "message", None):
+            continue
+        messages.append(msg)
+
+    return messages
+
+
+async def collect_signals(segment: str, limit_chats: int = 12, limit_messages_per_chat: int = 80) -> dict:
+    if segment not in CHAT_DISCOVERY_KEYWORDS:
+        raise ValueError(f"Неизвестный сегмент: {segment}")
 
     client = get_client()
-    await client.start()
+    await client.connect()
 
-    collected: list[dict] = []
+    scanned_chats = 0
+    scanned_messages = 0
+    kept_signals = 0
+
+    seen_chat_ids = set()
+    discovered_chats = []
+    collected_items = []
 
     try:
-        for query in queries:
-            logger.info("[telegram_signals] search query=%s segment=%s", query, segment)
+        for query in CHAT_DISCOVERY_KEYWORDS[segment]:
+            chats = await search_public_chats(client, query, limit=limit_chats)
+
+            for chat in chats:
+                chat_id = getattr(chat, "id", None)
+                if not chat_id or chat_id in seen_chat_ids:
+                    continue
+
+                seen_chat_ids.add(chat_id)
+                discovered_chats.append(chat)
+
+        logger.info(
+            "[telegram_signals] discovered_chats segment=%s total=%s",
+            segment,
+            len(discovered_chats),
+        )
+
+        for idx, chat in enumerate(discovered_chats, start=1):
+            scanned_chats += 1
+            title = _chat_title(chat)
+
+            logger.info(
+                "[telegram_signals] scan_chat segment=%s chat=%s (%s/%s)",
+                segment,
+                title,
+                idx,
+                len(discovered_chats),
+            )
+
             try:
-                async for msg in client.iter_messages(None, search=query, limit=per_query_limit):
-                    text = getattr(msg, "message", None)
-                    if not text:
-                        continue
+                messages = await _collect_messages_from_chat(client, chat, limit_messages_per_chat)
+            except Exception as exc:
+                logger.warning(
+                    "[telegram_signals] scan_chat_failed chat=%s error=%s",
+                    title,
+                    exc,
+                )
+                continue
 
-                    signal = classify_signal(text)
-                    if signal["level"] == "low":
-                        continue
+            scanned_messages += len(messages)
 
-                    chat = await msg.get_chat() if msg.chat_id else None
-                    sender = None
-                    try:
-                        sender = await msg.get_sender()
-                    except Exception:
-                        sender = None
+            for msg in messages:
+                text = (msg.message or "").strip()
+                if len(text) < 40:
+                    continue
 
-                    chat_title = getattr(chat, "title", None) or getattr(chat, "username", None) or str(getattr(msg, "chat_id", "-"))
-                    chat_username = getattr(chat, "username", None)
+                signal = classify_signal(text, segment)
+                if signal["level"] == "low":
+                    continue
 
-                    item = {
-                        "source_query": query,
-                        "segment": signal["segment"],
-                        "chat_id": str(getattr(msg, "chat_id", None) or ""),
-                        "chat_title": chat_title,
-                        "chat_username": chat_username,
-                        "chat_url": _peer_to_url(chat),
-                        "message_id": msg.id,
-                        "message_date": getattr(msg, "date", None),
-                        "author_id": str(getattr(msg, "sender_id", None) or ""),
-                        "author_name": _author_name(sender),
-                        "author_username": getattr(sender, "username", None),
-                        "message_text": text,
-                        "text_excerpt": text[:280],
-                        "matched_keywords": ", ".join(signal["matches"][:12]),
-                        "signal_score": signal["score"],
-                        "signal_level": signal["level"],
-                        "recommended_opener": signal["opener"],
-                        "status": "new",
-                    }
-                    collected.append(item)
-            except FloodWaitError as e:
-                logger.warning("[telegram_signals] flood wait query=%s wait=%s", query, e.seconds)
-                break
+                kept_signals += 1
+
+                collected_items.append({
+                    "source_query": segment,
+                    "segment": segment,
+                    "chat_id": str(getattr(chat, "id", "")),
+                    "chat_title": title,
+                    "chat_username": getattr(chat, "username", None),
+                    "chat_url": _chat_url(chat),
+                    "message_id": msg.id,
+                    "message_date": msg.date,
+                    "author_id": str(getattr(getattr(msg, "sender_id", None), "user_id", getattr(msg, "sender_id", ""))) if getattr(msg, "sender_id", None) else None,
+                    "author_name": None,
+                    "author_username": _author_username(msg),
+                    "message_text": text,
+                    "text_excerpt": text[:280],
+                    "matched_keywords": ",".join(signal["matches"]),
+                    "signal_score": signal["score"],
+                    "signal_level": signal["level"],
+                    "recommended_opener": signal["recommended_opener"],
+                    "status": "new",
+                })
+
+        save_stats = save_signals(collected_items) if collected_items else {"created": 0, "updated": 0}
+
+        logger.info(
+            "[telegram_signals] done segment=%s chats=%s messages=%s kept=%s created=%s updated=%s",
+            segment,
+            scanned_chats,
+            scanned_messages,
+            kept_signals,
+            save_stats["created"],
+            save_stats["updated"],
+        )
+
+        return {
+            "created": save_stats["created"],
+            "updated": save_stats["updated"],
+            "scanned_chats": scanned_chats,
+            "scanned_messages": scanned_messages,
+            "kept_signals": kept_signals,
+        }
+
     finally:
         await client.disconnect()
-
-    stats = save_signals(collected) if collected else {"created": 0, "updated": 0}
-    logger.info("[telegram_signals] done segment=%s created=%s updated=%s total=%s", segment, stats["created"], stats["updated"], len(collected))
-    return {"items": collected, **stats}
