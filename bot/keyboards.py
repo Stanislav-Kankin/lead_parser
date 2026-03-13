@@ -19,11 +19,13 @@ def telegram_signals_menu() -> InlineKeyboardMarkup:
             [InlineKeyboardButton(text="🛒 WB / Ozon боль", callback_data="tg_collect:ecom_marketplace_pain")],
             [InlineKeyboardButton(text="🌐 Свой сайт / Direct", callback_data="tg_collect:ecom_direct_growth")],
             [InlineKeyboardButton(text="🏭 Производители", callback_data="tg_collect:manufacturer_secondary")],
-            [InlineKeyboardButton(text="🔥 Последние сигналы", callback_data="tg_list:0:all")],
-            [InlineKeyboardButton(text="🎯 Актуальные лиды", callback_data="tg_actionable:0:all")],
+            [InlineKeyboardButton(text="🔥 Последние сигналы", callback_data="tg_list:all:0")],
+            [InlineKeyboardButton(text="🎯 Актуальные лиды", callback_data="tg_actionable:all:0")],
+            [InlineKeyboardButton(text="💬 Обсуждения с болью", callback_data="tg_discussions:all:0")],
+            [InlineKeyboardButton(text="🏢 Похожи на бизнес", callback_data="tg_business:all:0")],
             [
                 InlineKeyboardButton(text="📤 Excel лиды", callback_data="tg_export:actionable"),
-                InlineKeyboardButton(text="📦 Excel raw", callback_data="tg_export:raw"),
+                InlineKeyboardButton(text="📤 Excel raw", callback_data="tg_export:raw"),
             ],
         ]
     )

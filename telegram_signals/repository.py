@@ -8,9 +8,6 @@ from storage.db import SessionLocal
 from .models import TelegramSignal
 
 
-ACTIONABLE_TYPES = ("pain", "need_contractor", "direct_growth", "brand_signal")
-
-
 def save_signals(items: Iterable[dict]) -> dict:
     created = 0
     updated = 0
@@ -36,35 +33,45 @@ def save_signals(items: Iterable[dict]) -> dict:
     return {"created": created, "updated": updated}
 
 
-def _base_stmt(segment: str | None = None, only_actionable: bool = False):
-    stmt = select(TelegramSignal)
-    if segment:
-        stmt = stmt.where(TelegramSignal.segment == segment)
-    if only_actionable:
-        stmt = stmt.where(
-            TelegramSignal.is_actionable.is_(True),
-            TelegramSignal.message_type.in_(ACTIONABLE_TYPES),
-        )
-    level_order = case(
-        (TelegramSignal.signal_level == "high", 3),
-        (TelegramSignal.signal_level == "medium", 2),
-        else_=1,
-    )
-    return stmt.order_by(
-        desc(TelegramSignal.is_actionable),
-        desc(level_order),
-        desc(TelegramSignal.contactability_score),
-        desc(TelegramSignal.intent_score),
-        desc(TelegramSignal.pain_score),
-        desc(TelegramSignal.signal_score),
-        desc(TelegramSignal.message_date),
-        desc(TelegramSignal.created_at),
-    )
-
-
-def get_signals(segment: str | None = None, limit: int | None = None, only_actionable: bool = False) -> list[TelegramSignal]:
+def get_signals(
+    segment: str | None = None,
+    limit: int | None = None,
+    *,
+    only_actionable: bool = False,
+    conversation_type: str | None = None,
+    business_only: bool = False,
+) -> list[TelegramSignal]:
     with SessionLocal() as session:
-        stmt = _base_stmt(segment=segment, only_actionable=only_actionable)
-        if limit is not None:
+        stmt = select(TelegramSignal)
+        if segment:
+            stmt = stmt.where(TelegramSignal.segment == segment)
+        if only_actionable:
+            stmt = stmt.where(TelegramSignal.is_actionable == True)  # noqa: E712
+        if conversation_type:
+            stmt = stmt.where(TelegramSignal.conversation_type == conversation_type)
+        if business_only:
+            stmt = stmt.where(TelegramSignal.author_type_guess == "business")
+
+        level_order = case(
+            (TelegramSignal.signal_level == "high", 3),
+            (TelegramSignal.signal_level == "medium", 2),
+            else_=1,
+        )
+        stmt = stmt.order_by(
+            desc(TelegramSignal.final_lead_score),
+            desc(level_order),
+            desc(TelegramSignal.signal_score),
+            desc(TelegramSignal.message_date),
+            desc(TelegramSignal.created_at),
+        )
+        if limit:
             stmt = stmt.limit(limit)
         return list(session.execute(stmt).scalars().all())
+
+
+def get_discussion_leads(segment: str | None = None, limit: int | None = None) -> list[TelegramSignal]:
+    return get_signals(segment=segment, limit=limit, conversation_type="discussion", business_only=True)
+
+
+def get_business_like_messages(segment: str | None = None, limit: int | None = None) -> list[TelegramSignal]:
+    return get_signals(segment=segment, limit=limit, business_only=True)

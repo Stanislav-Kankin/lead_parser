@@ -13,6 +13,32 @@ engine = create_engine(
 SessionLocal = sessionmaker(bind=engine, autoflush=False, autocommit=False)
 
 
+
+TELEGRAM_SIGNAL_REQUIRED_COLUMNS = {
+    "source_type": "ALTER TABLE telegram_signals ADD COLUMN source_type VARCHAR DEFAULT 'chat_message'",
+    "is_comment": "ALTER TABLE telegram_signals ADD COLUMN is_comment BOOLEAN DEFAULT 0",
+    "parent_message_id": "ALTER TABLE telegram_signals ADD COLUMN parent_message_id INTEGER",
+    "root_message_id": "ALTER TABLE telegram_signals ADD COLUMN root_message_id INTEGER",
+    "message_type": "ALTER TABLE telegram_signals ADD COLUMN message_type VARCHAR",
+    "conversation_type": "ALTER TABLE telegram_signals ADD COLUMN conversation_type VARCHAR",
+    "author_type_guess": "ALTER TABLE telegram_signals ADD COLUMN author_type_guess VARCHAR",
+    "icp_score": "ALTER TABLE telegram_signals ADD COLUMN icp_score INTEGER DEFAULT 0",
+    "pain_score": "ALTER TABLE telegram_signals ADD COLUMN pain_score INTEGER DEFAULT 0",
+    "intent_score": "ALTER TABLE telegram_signals ADD COLUMN intent_score INTEGER DEFAULT 0",
+    "context_score": "ALTER TABLE telegram_signals ADD COLUMN context_score INTEGER DEFAULT 0",
+    "owner_likelihood_score": "ALTER TABLE telegram_signals ADD COLUMN owner_likelihood_score INTEGER DEFAULT 0",
+    "promo_penalty": "ALTER TABLE telegram_signals ADD COLUMN promo_penalty INTEGER DEFAULT 0",
+    "contractor_penalty": "ALTER TABLE telegram_signals ADD COLUMN contractor_penalty INTEGER DEFAULT 0",
+    "final_lead_score": "ALTER TABLE telegram_signals ADD COLUMN final_lead_score INTEGER DEFAULT 0",
+    "contactability_score": "ALTER TABLE telegram_signals ADD COLUMN contactability_score INTEGER DEFAULT 0",
+    "why_actionable": "ALTER TABLE telegram_signals ADD COLUMN why_actionable TEXT",
+    "company_hint": "ALTER TABLE telegram_signals ADD COLUMN company_hint VARCHAR",
+    "website_hint": "ALTER TABLE telegram_signals ADD COLUMN website_hint VARCHAR",
+    "contact_hint": "ALTER TABLE telegram_signals ADD COLUMN contact_hint VARCHAR",
+    "is_actionable": "ALTER TABLE telegram_signals ADD COLUMN is_actionable BOOLEAN DEFAULT 0"
+}
+
+
 REQUIRED_COLUMNS = {
     "title": "ALTER TABLE leads ADD COLUMN title VARCHAR",
     "opener": "ALTER TABLE leads ADD COLUMN opener VARCHAR",
@@ -39,18 +65,6 @@ REQUIRED_COLUMNS = {
     "root_domain": "ALTER TABLE leads ADD COLUMN root_domain VARCHAR",
 }
 
-TELEGRAM_SIGNAL_REQUIRED_COLUMNS = {
-    "message_type": "ALTER TABLE telegram_signals ADD COLUMN message_type VARCHAR",
-    "icp_score": "ALTER TABLE telegram_signals ADD COLUMN icp_score INTEGER DEFAULT 0",
-    "pain_score": "ALTER TABLE telegram_signals ADD COLUMN pain_score INTEGER DEFAULT 0",
-    "intent_score": "ALTER TABLE telegram_signals ADD COLUMN intent_score INTEGER DEFAULT 0",
-    "contactability_score": "ALTER TABLE telegram_signals ADD COLUMN contactability_score INTEGER DEFAULT 0",
-    "is_actionable": "ALTER TABLE telegram_signals ADD COLUMN is_actionable BOOLEAN DEFAULT 0",
-    "contact_hint": "ALTER TABLE telegram_signals ADD COLUMN contact_hint VARCHAR",
-    "company_hint": "ALTER TABLE telegram_signals ADD COLUMN company_hint VARCHAR",
-    "website_hint": "ALTER TABLE telegram_signals ADD COLUMN website_hint VARCHAR",
-}
-
 
 def _ensure_columns():
     inspector = inspect(engine)
@@ -72,6 +86,7 @@ def _ensure_columns():
         conn.execute(text("UPDATE leads SET contact_confidence = COALESCE(contact_confidence, CASE WHEN company_inn IS NOT NULL OR company_legal_name IS NOT NULL THEN 'high' WHEN company_email IS NOT NULL AND company_phone IS NOT NULL THEN 'medium' WHEN company_email IS NOT NULL OR company_phone IS NOT NULL THEN 'low' ELSE 'low' END)"))
 
 
+
 def _ensure_telegram_signal_columns():
     inspector = inspect(engine)
     if "telegram_signals" not in inspector.get_table_names():
@@ -83,11 +98,18 @@ def _ensure_telegram_signal_columns():
             if name not in columns:
                 conn.execute(text(ddl))
 
+        conn.execute(text("UPDATE telegram_signals SET source_type = COALESCE(source_type, 'chat_message')"))
+        conn.execute(text("UPDATE telegram_signals SET is_comment = COALESCE(is_comment, 0)"))
+        conn.execute(text("UPDATE telegram_signals SET is_actionable = COALESCE(is_actionable, 0)"))
+        conn.execute(text("UPDATE telegram_signals SET final_lead_score = COALESCE(final_lead_score, signal_score, 0)"))
         conn.execute(text("UPDATE telegram_signals SET icp_score = COALESCE(icp_score, 0)"))
         conn.execute(text("UPDATE telegram_signals SET pain_score = COALESCE(pain_score, 0)"))
         conn.execute(text("UPDATE telegram_signals SET intent_score = COALESCE(intent_score, 0)"))
+        conn.execute(text("UPDATE telegram_signals SET context_score = COALESCE(context_score, 0)"))
+        conn.execute(text("UPDATE telegram_signals SET owner_likelihood_score = COALESCE(owner_likelihood_score, 0)"))
+        conn.execute(text("UPDATE telegram_signals SET promo_penalty = COALESCE(promo_penalty, 0)"))
+        conn.execute(text("UPDATE telegram_signals SET contractor_penalty = COALESCE(contractor_penalty, 0)"))
         conn.execute(text("UPDATE telegram_signals SET contactability_score = COALESCE(contactability_score, 0)"))
-        conn.execute(text("UPDATE telegram_signals SET is_actionable = COALESCE(is_actionable, 0)"))
 
 
 def init_db():
