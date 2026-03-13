@@ -1,5 +1,6 @@
+import logging
 import re
-from typing import Iterable
+import time
 from urllib.parse import urljoin
 
 import httpx
@@ -7,27 +8,17 @@ from bs4 import BeautifulSoup
 
 from utils.domain_normalizer import normalize_domain
 
+logger = logging.getLogger(__name__)
+
 EMAIL_RE = re.compile(r"[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}", re.IGNORECASE)
 PHONE_RE = re.compile(r"(?:\+?7|8)[\s\-()]*\d[\d\s\-()]{8,}")
 INN_RE = re.compile(r"(?:инн|inn)\s*[:№#]?\s*(\d{10}|\d{12})", re.IGNORECASE)
 OGRN_RE = re.compile(r"(?:огрн|ogrn)\s*[:№#]?\s*(\d{13}|\d{15})", re.IGNORECASE)
-LEGAL_NAME_RE = re.compile(
-    r"\b((?:ООО|АО|ПАО|ЗАО|ИП)\s*[«\"]?[^\n\r\t<>]{2,120})",
-    re.IGNORECASE,
-)
+LEGAL_NAME_RE = re.compile(r"\b((?:ООО|АО|ПАО|ЗАО|ИП)\s*[«\"]?[^\n\r\t<>]{2,120})", re.IGNORECASE)
 
-BAD_EMAIL_PARTS = {
-    "example.com",
-    "email.com",
-    "noreply",
-    "no-reply",
-    "sentry",
-    "test@",
-    "rating@",
-    "info@example",
-}
+BAD_EMAIL_PARTS = {"example.com", "email.com", "noreply", "no-reply", "sentry", "test@", "rating@", "info@example"}
 BAD_PHONE_VALUES = {"0000000000", "1111111111", "1234567890", "1010101010", "8000000000"}
-PREFERRED_PATHS = ["", "/contacts", "/contact", "/about", "/o-kompanii", "/company", "/rekvizity", "/privacy", "/policy"]
+SECONDARY_PATHS = ["/contacts", "/rekvizity"]
 
 
 async def analyze_domain(domain: str) -> dict:
@@ -35,66 +26,71 @@ async def analyze_domain(domain: str) -> dict:
     if not normalized:
         return _empty_result()
 
-    headers = {
-        "User-Agent": (
-            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-            "AppleWebKit/537.36 (KHTML, like Gecko) "
-            "Chrome/122.0.0.0 Safari/537.36"
-        )
-    }
+    logger.info("[domain_analyzer] start domain=%s", normalized)
+    started = time.perf_counter()
 
-    timeout = httpx.Timeout(12.0, connect=4.0)
-    aggregate = _empty_result()
-    aggregate["parsed_pages"] = []
+    headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0 Safari/537.36"}
+    timeout = httpx.Timeout(4.0, connect=2.5)
+    result = _empty_result()
 
-    async with httpx.AsyncClient(timeout=timeout, follow_redirects=True, headers=headers, verify=False) as client:
-        base_url = await _resolve_base_url(client, normalized)
-        if not base_url:
-            return aggregate
+    async with httpx.AsyncClient(headers=headers, timeout=timeout, follow_redirects=True, verify=False) as client:
+        homepage = await _fetch_page(client, f"https://{normalized}")
+        if homepage:
+            result = _merge_result(result, homepage)
 
-        for path in PREFERRED_PATHS:
-            url = urljoin(base_url, path)
-            try:
-                response = await client.get(url)
-                response.raise_for_status()
-            except Exception:
-                continue
+        need_more = not (result.get("email") or result.get("phone")) or not (result.get("company_inn") or result.get("company_legal_name"))
+        if need_more:
+            for path in SECONDARY_PATHS:
+                page = await _fetch_page(client, urljoin(f"https://{normalized}", path))
+                if page:
+                    result = _merge_result(result, page)
+                if (result.get("email") or result.get("phone")) and (result.get("company_inn") or result.get("company_legal_name")):
+                    break
 
-            page = _parse_page(response.text)
-            aggregate["parsed_pages"].append(url)
-            aggregate = _merge_result(aggregate, page)
-
-    return aggregate
-
-
-async def _resolve_base_url(client: httpx.AsyncClient, domain: str) -> str | None:
-    for variant in [f"https://{domain}", f"http://{domain}"]:
-        try:
-            response = await client.get(variant)
-            response.raise_for_status()
-            return str(response.url)
-        except Exception:
-            continue
-    return None
+    elapsed = time.perf_counter() - started
+    logger.info(
+        "[domain_analyzer] done domain=%s email=%s phone=%s inn=%s ogrn=%s elapsed=%.2fs",
+        normalized,
+        bool(result.get("email")),
+        bool(result.get("phone")),
+        bool(result.get("company_inn")),
+        bool(result.get("company_ogrn")),
+        elapsed,
+    )
+    return result
 
 
-def _parse_page(html: str) -> dict:
+async def _fetch_page(client: httpx.AsyncClient, url: str) -> dict | None:
+    try:
+        logger.info("[domain_analyzer] fetch url=%s", url)
+        response = await client.get(url)
+        if response.status_code >= 400:
+            return None
+    except Exception as exc:
+        logger.info("[domain_analyzer] fetch_failed url=%s error=%s", url, exc)
+        return None
+
+    content_type = response.headers.get("content-type", "")
+    if "text/html" not in content_type:
+        return None
+
+    html = response.text or ""
     soup = BeautifulSoup(html, "lxml")
+    title = soup.title.get_text(" ", strip=True) if soup.title else None
+    meta = soup.find("meta", attrs={"name": "description"})
+    description = meta.get("content", "").strip() if meta else None
+    h1 = soup.find("h1")
+    h1_text = h1.get_text(" ", strip=True) if h1 else None
 
-    title = soup.title.get_text(" ", strip=True)[:200] if soup.title else None
-    description = None
-    meta_desc = soup.find("meta", attrs={"name": "description"})
-    if meta_desc and meta_desc.get("content"):
-        description = meta_desc["content"].strip()[:320]
-
-    h1 = None
-    h1_tag = soup.find("h1")
-    if h1_tag:
-        h1 = h1_tag.get_text(" ", strip=True)[:200]
+    for tag in soup(["script", "style", "noscript"]):
+        tag.extract()
 
     text = soup.get_text(" ", strip=True)
-    text = re.sub(r"\s+", " ", text)[:10000]
+    text = re.sub(r"\s+", " ", text)
+    text = text[:15000]
 
+    email = _extract_email(text)
+    phone = _extract_phone(text)
     inn = _extract_first(INN_RE, text)
     ogrn = _extract_first(OGRN_RE, text)
     legal_name = _extract_legal_name(text)
@@ -103,16 +99,17 @@ def _parse_page(html: str) -> dict:
     return {
         "title": title,
         "description": description,
-        "h1": h1,
+        "h1": h1_text,
         "text": text,
-        "email": _extract_email(html),
-        "phone": _extract_phone(text or html),
+        "email": email,
+        "phone": phone,
         "company_inn": inn,
         "company_ogrn": ogrn,
         "company_legal_name": legal_name,
         "legal_form": legal_form,
         "inn_source": "site_requisites" if inn or legal_name else None,
     }
+
 
 
 def _empty_result() -> dict:
@@ -131,25 +128,15 @@ def _empty_result() -> dict:
     }
 
 
+
 def _merge_result(base: dict, page: dict) -> dict:
-    for key in [
-        "title",
-        "description",
-        "h1",
-        "email",
-        "phone",
-        "company_inn",
-        "company_ogrn",
-        "company_legal_name",
-        "legal_form",
-        "inn_source",
-    ]:
+    for key in ["title", "description", "h1", "email", "phone", "company_inn", "company_ogrn", "company_legal_name", "legal_form", "inn_source"]:
         if not base.get(key) and page.get(key):
             base[key] = page[key]
-
     merged_text = " ".join(part for part in [base.get("text"), page.get("text")] if part)
-    base["text"] = merged_text[:12000]
+    base["text"] = merged_text[:15000]
     return base
+
 
 
 def _extract_first(pattern: re.Pattern, text: str | None) -> str | None:
@@ -162,6 +149,7 @@ def _extract_first(pattern: re.Pattern, text: str | None) -> str | None:
     return value or None
 
 
+
 def _extract_legal_name(text: str | None) -> str | None:
     if not text:
         return None
@@ -169,10 +157,11 @@ def _extract_legal_name(text: str | None) -> str | None:
         value = re.sub(r"\s+", " ", match.group(1)).strip(" .,-;:")
         if len(value) < 4:
             continue
-        if "политик" in value.lower() or "конфиденц" in value.lower():
+        if any(bad in value.lower() for bad in ["политик", "конфиденц", "пользоват"]):
             continue
-        return value[:140]
+        return value[:120]
     return None
+
 
 
 def _extract_legal_form(legal_name: str | None) -> str | None:
@@ -185,13 +174,12 @@ def _extract_legal_form(legal_name: str | None) -> str | None:
     return None
 
 
+
 def _extract_email(text: str | None) -> str | None:
     if not text:
         return None
-
-    matches = EMAIL_RE.findall(text)
-    ranked = sorted(matches, key=_email_rank, reverse=True)
-    for match in ranked:
+    matches = sorted(EMAIL_RE.findall(text), key=_email_rank, reverse=True)
+    for match in matches:
         email = match.strip().lower()
         if any(bad in email for bad in BAD_EMAIL_PARTS):
             continue
@@ -199,6 +187,7 @@ def _extract_email(text: str | None) -> str | None:
             continue
         return email
     return None
+
 
 
 def _email_rank(email: str) -> int:
@@ -213,10 +202,10 @@ def _email_rank(email: str) -> int:
     return score
 
 
+
 def _extract_phone(text: str | None) -> str | None:
     if not text:
         return None
-
     for match in PHONE_RE.findall(text):
         phone = re.sub(r"\s+", " ", match).strip()
         digits = re.sub(r"\D", "", phone)

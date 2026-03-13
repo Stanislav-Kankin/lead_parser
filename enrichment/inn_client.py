@@ -1,3 +1,4 @@
+import logging
 import os
 from typing import Any
 
@@ -5,6 +6,7 @@ import httpx
 
 from utils.domain_normalizer import domains_for_lookup
 
+logger = logging.getLogger(__name__)
 HELPER_API_BASE_URL = os.getenv("HELPER_API_BASE_URL", "http://127.0.0.1:8010").rstrip("/")
 
 
@@ -13,24 +15,29 @@ async def get_company_by_domain(domain: str) -> dict[str, Any] | None:
     if not candidates:
         return None
 
-    timeout = httpx.Timeout(12.0, connect=4.0)
+    timeout = httpx.Timeout(3.5, connect=2.0)
     async with httpx.AsyncClient(timeout=timeout, follow_redirects=True) as client:
         for idx, candidate in enumerate(candidates):
+            logger.info("[helper_api] lookup domain=%s strategy=%s", candidate, "root" if idx > 0 else "full")
             data = await _lookup_domain(client, candidate)
             if data:
                 data.setdefault("lookup_domain", candidate)
                 data.setdefault("lookup_strategy", "root_domain" if idx > 0 else "full_domain")
+                logger.info("[helper_api] success domain=%s email=%s phone=%s", candidate, bool(data.get("email")), bool(data.get("phone")))
                 return data
+    logger.info("[helper_api] no_data domain=%s", domain)
     return None
 
 
 async def _lookup_domain(client: httpx.AsyncClient, domain: str) -> dict[str, Any] | None:
     try:
         response = await client.get(f"{HELPER_API_BASE_URL}/lookup/by-domain", params={"domain": domain})
-    except Exception:
+    except Exception as exc:
+        logger.warning("[helper_api] failed domain=%s error=%s", domain, exc)
         return None
 
     if response.status_code >= 400:
+        logger.info("[helper_api] http_%s domain=%s", response.status_code, domain)
         return None
 
     try:

@@ -1,3 +1,4 @@
+import logging
 from datetime import datetime
 from typing import Iterable
 
@@ -7,10 +8,13 @@ from models.lead import Lead
 from storage.db import SessionLocal
 from utils.domain_normalizer import get_root_domain, normalize_domain
 
+logger = logging.getLogger(__name__)
+
 
 def save_leads(leads: Iterable[dict]) -> dict:
     created = 0
     updated = 0
+    skipped = 0
 
     with SessionLocal() as session:
         for item in leads:
@@ -19,6 +23,7 @@ def save_leads(leads: Iterable[dict]) -> dict:
             root_domain = get_root_domain(raw_domain)
 
             if not raw_domain or not domain_normalized:
+                skipped += 1
                 continue
 
             exists = session.execute(
@@ -72,7 +77,8 @@ def save_leads(leads: Iterable[dict]) -> dict:
 
         session.commit()
 
-    return {"created": created, "updated": updated}
+    logger.info("[lead_repository] save created=%s updated=%s skipped=%s", created, updated, skipped)
+    return {"created": created, "updated": updated, "skipped": skipped}
 
 
 
@@ -84,6 +90,7 @@ def get_last_leads(limit: int = 10, only_with_contacts: bool = True) -> list[Lea
 
         sales_ready_order = case((Lead.sales_ready.is_(True), 1), else_=0)
         icp_order = case((Lead.is_icp.is_(True), 1), else_=0)
+        inn_order = case((Lead.company_inn.is_not(None), 1), else_=0)
         confidence_order = case(
             (Lead.contact_confidence == "high", 3),
             (Lead.contact_confidence == "medium", 2),
@@ -94,6 +101,7 @@ def get_last_leads(limit: int = 10, only_with_contacts: bool = True) -> list[Lea
         stmt = stmt.order_by(
             desc(sales_ready_order),
             desc(icp_order),
+            desc(inn_order),
             desc(confidence_order),
             desc(Lead.updated_at),
             desc(Lead.created_at),
