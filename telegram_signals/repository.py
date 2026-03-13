@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import Iterable
 
-from sqlalchemy import case, desc, select
+from sqlalchemy import case, desc, or_, select
 
 from storage.db import SessionLocal
 from .models import TelegramSignal
@@ -40,6 +40,8 @@ def get_signals(
     only_actionable: bool = False,
     conversation_type: str | None = None,
     business_only: bool = False,
+    lead_fit: str | None = None,
+    lead_fit_in: list[str] | None = None,
 ) -> list[TelegramSignal]:
     with SessionLocal() as session:
         stmt = select(TelegramSignal)
@@ -51,6 +53,10 @@ def get_signals(
             stmt = stmt.where(TelegramSignal.conversation_type == conversation_type)
         if business_only:
             stmt = stmt.where(TelegramSignal.author_type_guess == "business")
+        if lead_fit:
+            stmt = stmt.where(TelegramSignal.lead_fit == lead_fit)
+        if lead_fit_in:
+            stmt = stmt.where(TelegramSignal.lead_fit.in_(lead_fit_in))
 
         level_order = case(
             (TelegramSignal.signal_level == "high", 3),
@@ -69,9 +75,39 @@ def get_signals(
         return list(session.execute(stmt).scalars().all())
 
 
+def get_target_leads(segment: str | None = None, limit: int | None = None) -> list[TelegramSignal]:
+    return get_signals(segment=segment, limit=limit, lead_fit="target")
+
+
+def get_review_leads(segment: str | None = None, limit: int | None = None) -> list[TelegramSignal]:
+    return get_signals(segment=segment, limit=limit, lead_fit="review")
+
+
 def get_discussion_leads(segment: str | None = None, limit: int | None = None) -> list[TelegramSignal]:
-    return get_signals(segment=segment, limit=limit, conversation_type="discussion", business_only=True)
+    with SessionLocal() as session:
+        stmt = select(TelegramSignal)
+        if segment:
+            stmt = stmt.where(TelegramSignal.segment == segment)
+        stmt = stmt.where(
+            TelegramSignal.lead_fit.in_(["target", "review"]),
+            TelegramSignal.author_type_guess != "contractor",
+            or_(
+                TelegramSignal.context_score >= 2,
+                TelegramSignal.conversation_type.in_(["discussion", "complaint", "help_request", "question"]),
+                TelegramSignal.pain_score >= 3,
+                TelegramSignal.intent_score >= 4,
+            ),
+        )
+        stmt = stmt.order_by(
+            desc(TelegramSignal.context_score),
+            desc(TelegramSignal.final_lead_score),
+            desc(TelegramSignal.message_date),
+            desc(TelegramSignal.created_at),
+        )
+        if limit:
+            stmt = stmt.limit(limit)
+        return list(session.execute(stmt).scalars().all())
 
 
 def get_business_like_messages(segment: str | None = None, limit: int | None = None) -> list[TelegramSignal]:
-    return get_signals(segment=segment, limit=limit, business_only=True)
+    return get_signals(segment=segment, limit=limit, business_only=True, lead_fit_in=["target", "review"])

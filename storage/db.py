@@ -35,6 +35,8 @@ TELEGRAM_SIGNAL_REQUIRED_COLUMNS = {
     "company_hint": "ALTER TABLE telegram_signals ADD COLUMN company_hint VARCHAR",
     "website_hint": "ALTER TABLE telegram_signals ADD COLUMN website_hint VARCHAR",
     "contact_hint": "ALTER TABLE telegram_signals ADD COLUMN contact_hint VARCHAR",
+    "lead_fit": "ALTER TABLE telegram_signals ADD COLUMN lead_fit VARCHAR DEFAULT 'noise'",
+    "next_step": "ALTER TABLE telegram_signals ADD COLUMN next_step VARCHAR",
     "is_actionable": "ALTER TABLE telegram_signals ADD COLUMN is_actionable BOOLEAN DEFAULT 0"
 }
 

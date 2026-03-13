@@ -20,7 +20,8 @@ def telegram_signals_menu() -> InlineKeyboardMarkup:
             [InlineKeyboardButton(text="🌐 Свой сайт / Direct", callback_data="tg_collect:ecom_direct_growth")],
             [InlineKeyboardButton(text="🏭 Производители", callback_data="tg_collect:manufacturer_secondary")],
             [InlineKeyboardButton(text="🔥 Последние сигналы", callback_data="tg_list:all:0")],
-            [InlineKeyboardButton(text="🎯 Актуальные лиды", callback_data="tg_actionable:all:0")],
+            [InlineKeyboardButton(text="🎯 Целевые лиды", callback_data="tg_targets:all:0")],
+            [InlineKeyboardButton(text="🟡 На проверку", callback_data="tg_review:all:0")],
             [InlineKeyboardButton(text="💬 Обсуждения с болью", callback_data="tg_discussions:all:0")],
             [InlineKeyboardButton(text="🏢 Похожи на бизнес", callback_data="tg_business:all:0")],
             [

@@ -19,9 +19,9 @@ def _contains_any(text_l: str, keywords: list[str]) -> list[str]:
 
 def _extract_company_hint(text: str) -> str | None:
     patterns = [
-        r"мы\s+[—-]\s+([^\n\.]{3,80})",
-        r"компания\s+[—-:]\s*([^\n\.]{3,80})",
-        r"бренд\s+[—-:]\s*([^\n\.]{3,80})",
+        r"мы\s+[-—]\s+([^\n\.]{3,80})",
+        r"компания\s+[-—:]\s*([^\n\.]{3,80})",
+        r"бренд\s+[-—:]\s*([^\n\.]{3,80})",
     ]
     for pattern in patterns:
         match = re.search(pattern, text, flags=re.I)
@@ -54,8 +54,6 @@ def _guess_author_type(text_l: str) -> tuple[str, int, int]:
 
 
 def _guess_conversation_type(text_l: str, has_intent: bool, has_pain: bool, author_type: str) -> str:
-    if has_intent and "?" in text_l:
-        return "help_request"
     if has_intent:
         return "help_request"
     if has_pain:
@@ -67,7 +65,13 @@ def _guess_conversation_type(text_l: str, has_intent: bool, has_pain: bool, auth
     return "discussion"
 
 
-def build_recommended_opener(text_l: str, message_type: str) -> str:
+def build_recommended_opener(text_l: str, message_type: str, lead_fit: str) -> str:
+    if lead_fit == "target":
+        return (
+            "Вижу, что здесь есть реальный бизнесовый сигнал. "
+            "Я бы заходил не с каналами, а с короткой гипотезой: где маркетинг не доходит до денег, "
+            "как снизить зависимость от маркетплейсов и собрать управляемый direct-канал."
+        )
     if message_type == "pain":
         return (
             "Вижу, что у вас обсуждается экономика канала и зависимость от маркетплейсов. "
@@ -89,6 +93,39 @@ def build_recommended_opener(text_l: str, message_type: str) -> str:
             "Уместен заход через рост собственного канала продаж и контроль экономики маркетинга."
         )
     return "Есть релевантный e-commerce сигнал. Нужен аккуратный ручной разбор."
+
+
+def _build_lead_fit(
+    *,
+    message_type: str,
+    author_type_guess: str,
+    signal_score: int,
+    pain_hits: list[str],
+    intent_hits: list[str],
+    direct_hits: list[str],
+    brand_hits: list[str],
+    contactability_score: int,
+) -> tuple[str, str]:
+    if message_type in {"service_ad", "vacancy"} or author_type_guess == "contractor":
+        return "contractor", "ignore"
+
+    has_business_signal = bool(pain_hits or intent_hits or direct_hits or brand_hits)
+
+    if (
+        message_type in {"pain", "need_contractor", "direct_growth", "brand_signal"}
+        and has_business_signal
+        and signal_score >= 8
+    ):
+        if pain_hits or intent_hits or direct_hits:
+            if contactability_score >= 1:
+                return "target", "outreach_now"
+            return "review", "research_company"
+        return "review", "research_company"
+
+    if has_business_signal and signal_score >= 5:
+        return "review", "manual_review"
+
+    return "noise", "ignore"
 
 
 def classify_signal(
@@ -118,7 +155,7 @@ def classify_signal(
     intent_score = len(intent_hits) * 4
     icp_score = len(direct_hits) * 2 + len(brand_hits) * 2
     context_score = 2 if context_text.strip() else 0
-    if any(x in context_l for x in ["кто посоветует", "посоветуйте", "не окупается", "ищем", "у нас"]):
+    if any(x in context_l for x in ["кто посоветует", "посоветуйте", "не окупается", "ищем", "у нас", "кто работал", "подскажите", "есть ли смысл"]):
         context_score += 2
 
     promo_penalty = 0
@@ -198,12 +235,17 @@ def classify_signal(
     else:
         signal_level = "low"
 
-    is_actionable = (
-        message_type in {"pain", "need_contractor", "direct_growth", "brand_signal"}
-        and author_type_guess != "contractor"
-        and signal_score >= 10
-        and contactability_score >= 1
+    lead_fit, next_step = _build_lead_fit(
+        message_type=message_type,
+        author_type_guess=author_type_guess,
+        signal_score=signal_score,
+        pain_hits=pain_hits,
+        intent_hits=intent_hits,
+        direct_hits=direct_hits,
+        brand_hits=brand_hits,
+        contactability_score=contactability_score,
     )
+    is_actionable = lead_fit == "target"
 
     reasons = []
     if pain_hits:
@@ -223,6 +265,8 @@ def classify_signal(
     elif contactability_score >= 1:
         reasons.append("есть хотя бы косвенный канал контакта")
 
+    why = "; ".join(reasons[:4])
+
     return {
         "matched_keywords": ",".join(matched_keywords),
         "signal_score": signal_score,
@@ -239,10 +283,12 @@ def classify_signal(
         "contractor_penalty": contractor_penalty,
         "final_lead_score": signal_score,
         "contactability_score": contactability_score,
+        "lead_fit": lead_fit,
+        "next_step": next_step,
         "is_actionable": 1 if is_actionable else 0,
         "company_hint": company_hint,
         "website_hint": website_hint,
         "contact_hint": contact_hint,
-        "why_actionable": "; ".join(reasons[:4]),
-        "recommended_opener": build_recommended_opener(full_l, message_type),
+        "why_actionable": why,
+        "recommended_opener": build_recommended_opener(full_l, message_type, lead_fit),
     }

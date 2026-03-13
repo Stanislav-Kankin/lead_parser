@@ -15,7 +15,13 @@ from sources.domain_search import search_domains_multi
 from sources.query_builder import build_queries
 from storage.lead_repository import get_last_leads, save_leads
 from telegram_signals.exporter import export_signals_to_xlsx
-from telegram_signals.repository import get_business_like_messages, get_discussion_leads, get_signals
+from telegram_signals.repository import (
+    get_business_like_messages,
+    get_discussion_leads,
+    get_review_leads,
+    get_signals,
+    get_target_leads,
+)
 from telegram_signals.service import collect_signals
 from utils.domain_normalizer import normalize_domain
 
@@ -115,7 +121,6 @@ async def tg_signals_menu_handler(callback: CallbackQuery):
     await callback.answer()
 
 
-
 @router.callback_query(F.data.startswith("tg_collect:"))
 async def tg_collect(callback: CallbackQuery):
     segment = (callback.data or "").split(":", 1)[1]
@@ -146,7 +151,7 @@ async def tg_list(callback: CallbackQuery):
     segment_filter, page = _parse_segment_page(callback.data or "")
     items = get_signals(segment=segment_filter, limit=None)
     if not items:
-        await _send_or_edit(callback, "Пока Telegram-сигналов нет. Сначала запусти поиск по одному из сегментов.")
+        await _send_or_edit(callback, "Пока Telegram-сигналов нет. Сначала запусти поиск по одному из сегментов.", reply_markup=telegram_signals_menu())
         await callback.answer()
         return
 
@@ -162,12 +167,54 @@ async def tg_list(callback: CallbackQuery):
     await callback.answer()
 
 
+@router.callback_query(F.data.startswith("tg_targets:"))
+async def tg_targets(callback: CallbackQuery):
+    segment_filter, page = _parse_segment_page(callback.data or "")
+    items = get_target_leads(segment=segment_filter, limit=None)
+    if not items:
+        await _send_or_edit(callback, "Пока целевых лидов нет. Сначала запусти поиск по сегменту.", reply_markup=telegram_signals_menu())
+        await callback.answer()
+        return
+
+    total_pages = max(1, math.ceil(len(items) / PAGE_SIZE))
+    page = min(page, total_pages - 1)
+    text = _build_signal_page("Целевые лиды", items, page, total_pages, _ru_segment(segment_filter or "all"))
+
+    await _send_or_edit(
+        callback,
+        text,
+        reply_markup=pagination_keyboard("tg_targets", page, total_pages, extra=(segment_filter or "all")),
+    )
+    await callback.answer()
+
+
+@router.callback_query(F.data.startswith("tg_review:"))
+async def tg_review(callback: CallbackQuery):
+    segment_filter, page = _parse_segment_page(callback.data or "")
+    items = get_review_leads(segment=segment_filter, limit=None)
+    if not items:
+        await _send_or_edit(callback, "Пока лидов на проверку нет. Сначала запусти поиск по сегменту.", reply_markup=telegram_signals_menu())
+        await callback.answer()
+        return
+
+    total_pages = max(1, math.ceil(len(items) / PAGE_SIZE))
+    page = min(page, total_pages - 1)
+    text = _build_signal_page("Лиды на проверку", items, page, total_pages, _ru_segment(segment_filter or "all"))
+
+    await _send_or_edit(
+        callback,
+        text,
+        reply_markup=pagination_keyboard("tg_review", page, total_pages, extra=(segment_filter or "all")),
+    )
+    await callback.answer()
+
+
 @router.callback_query(F.data.startswith("tg_actionable:"))
 async def tg_actionable(callback: CallbackQuery):
     segment_filter, page = _parse_segment_page(callback.data or "")
-    items = get_signals(segment=segment_filter, limit=None, only_actionable=True)
+    items = get_signals(segment=segment_filter, limit=None, lead_fit_in=["target", "review"])
     if not items:
-        await _send_or_edit(callback, "Пока актуальных лидов нет. Сначала запусти поиск по сегменту.")
+        await _send_or_edit(callback, "Пока актуальных лидов нет. Сначала запусти поиск по сегменту.", reply_markup=telegram_signals_menu())
         await callback.answer()
         return
 
@@ -188,7 +235,7 @@ async def tg_discussions(callback: CallbackQuery):
     segment_filter, page = _parse_segment_page(callback.data or "")
     items = get_discussion_leads(segment=segment_filter, limit=None)
     if not items:
-        await _send_or_edit(callback, "Пока обсуждений с болью нет. Сначала запусти поиск по сегменту.")
+        await _send_or_edit(callback, "Пока обсуждений с болью нет. Сначала запусти поиск по сегменту.", reply_markup=telegram_signals_menu())
         await callback.answer()
         return
 
@@ -209,7 +256,7 @@ async def tg_business(callback: CallbackQuery):
     segment_filter, page = _parse_segment_page(callback.data or "")
     items = get_business_like_messages(segment=segment_filter, limit=None)
     if not items:
-        await _send_or_edit(callback, "Пока сообщений от business-like авторов нет. Сначала запусти поиск по сегменту.")
+        await _send_or_edit(callback, "Пока сообщений от business-like авторов нет. Сначала запусти поиск по сегменту.", reply_markup=telegram_signals_menu())
         await callback.answer()
         return
 
@@ -230,7 +277,11 @@ async def tg_export(callback: CallbackQuery):
     kind = (callback.data or "").split(":", 1)[1]
     await callback.answer("Готовлю файл…")
     file_path = export_signals_to_xlsx(kind)
-    await callback.message.answer_document(FSInputFile(str(file_path)), caption=f"Экспорт Telegram signals: {escape_html(kind)}", parse_mode="HTML")
+    await callback.message.answer_document(
+        FSInputFile(str(file_path)),
+        caption=f"Экспорт Telegram signals: {escape_html(kind)}",
+        parse_mode="HTML",
+    )
 
 
 @router.callback_query(F.data == "page_info")
@@ -459,7 +510,6 @@ async def handle_query(message: Message):
     SEARCH_RESULTS_CACHE[sent.message_id] = display_items
 
 
-
 def format_lead_card(idx: int, lead: dict) -> str:
     return (
         f"<b>{idx}. {escape_html(lead.get('domain') or '-')}</b>\n"
@@ -486,13 +536,14 @@ def format_lead_card(idx: int, lead: dict) -> str:
     )
 
 
-
 def format_signal_card(idx: int, signal) -> str:
     title = escape_html(signal.chat_title or "-")
     primary_score = getattr(signal, "final_lead_score", None) or signal.signal_score or 0
     message_type = getattr(signal, "message_type", None) or "-"
     conversation_type = getattr(signal, "conversation_type", None) or "-"
     author_type = getattr(signal, "author_type_guess", None) or "-"
+    lead_fit = getattr(signal, "lead_fit", None) or "-"
+    next_step = getattr(signal, "next_step", None) or "-"
     why = _trim_text(getattr(signal, "why_actionable", None) or "-", 160)
     company = getattr(signal, "company_hint", None) or "-"
     website = getattr(signal, "website_hint", None)
@@ -502,6 +553,7 @@ def format_signal_card(idx: int, signal) -> str:
     return (
         f"<b>{idx}. {title}</b>\n"
         f"<b>Сегмент:</b> {escape_html(_ru_segment(signal.segment))}\n"
+        f"<b>Lead fit:</b> {escape_html(_ru_lead_fit(lead_fit))} | <b>Действие:</b> {escape_html(_ru_next_step(next_step))}\n"
         f"<b>Тип:</b> {escape_html(message_type)} / {escape_html(conversation_type)}\n"
         f"<b>Автор-профиль:</b> {escape_html(author_type)}\n"
         f"<b>Уровень:</b> {escape_html(_ru_signal_level(signal.signal_level))}\n"
@@ -514,6 +566,7 @@ def format_signal_card(idx: int, signal) -> str:
         f"<b>Ссылка на чат:</b> {escape_html(signal.chat_url or '-')}"
     )
 
+
 def _pick_value(data: dict | None, key: str) -> str | None:
     if not data:
         return None
@@ -522,7 +575,6 @@ def _pick_value(data: dict | None, key: str) -> str | None:
         return None
     value = str(value).strip()
     return value or None
-
 
 
 def _build_contacts_source(helper_data: dict | None, analysis: dict) -> str:
@@ -541,7 +593,6 @@ def _build_contacts_source(helper_data: dict | None, analysis: dict) -> str:
     return "-"
 
 
-
 def _get_contact_confidence(inn: str | None, legal_name: str | None, email: str | None, phone: str | None) -> str:
     if inn or legal_name:
         return "high"
@@ -552,7 +603,6 @@ def _get_contact_confidence(inn: str | None, legal_name: str | None, email: str 
     return "low"
 
 
-
 def _parse_page(payload: str | None) -> int:
     try:
         return max(0, int((payload or "").split(":", 1)[1]))
@@ -560,10 +610,8 @@ def _parse_page(payload: str | None) -> int:
         return 0
 
 
-
 def _short(value: str, limit: int = 140) -> str:
     return value if len(value) <= limit else value[: limit - 1] + "…"
-
 
 
 def _ru_lead_type(value: str | None) -> str:
@@ -575,11 +623,9 @@ def _ru_lead_type(value: str | None) -> str:
     return mapping.get(value or "", value or "-")
 
 
-
 def _ru_priority(value: str | None) -> str:
     mapping = {"high": "Высокий", "medium": "Средний", "low": "Низкий"}
     return mapping.get(value or "", value or "-")
-
 
 
 def _ru_confidence(value: str | None) -> str:
@@ -587,11 +633,9 @@ def _ru_confidence(value: str | None) -> str:
     return mapping.get(value or "", value or "-")
 
 
-
 def _ru_inn_source(value: str | None) -> str:
     mapping = {"site_requisites": "Сайт / реквизиты"}
     return mapping.get(value or "", value or "-")
-
 
 
 def _ru_segment(value: str | None) -> str:
@@ -604,11 +648,29 @@ def _ru_segment(value: str | None) -> str:
     return mapping.get(value or "", value or "-")
 
 
-
 def _ru_signal_level(value: str | None) -> str:
     mapping = {"high": "Высокий", "medium": "Средний", "low": "Низкий"}
     return mapping.get(value or "", value or "-")
 
+
+def _ru_lead_fit(value: str | None) -> str:
+    mapping = {
+        "target": "Целевой",
+        "review": "На проверку",
+        "contractor": "Подрядчик",
+        "noise": "Шум",
+    }
+    return mapping.get(value or "", value or "-")
+
+
+def _ru_next_step(value: str | None) -> str:
+    mapping = {
+        "outreach_now": "Писать сейчас",
+        "research_company": "Доресерчить компанию",
+        "manual_review": "Ручная проверка",
+        "ignore": "Игнорировать",
+    }
+    return mapping.get(value or "", value or "-")
 
 
 def _human_reason(reason: str) -> str:
@@ -624,7 +686,6 @@ def _human_reason(reason: str) -> str:
     except Exception:
         return reason
     return f"+ {positive or '-'}\\n- {negative or '-'}"
-
 
 
 def escape_html(value: str) -> str:
