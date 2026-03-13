@@ -8,6 +8,9 @@ from storage.db import SessionLocal
 from .models import TelegramSignal
 
 
+ACTIONABLE_TYPES = ("pain", "need_contractor", "direct_growth", "brand_signal")
+
+
 def save_signals(items: Iterable[dict]) -> dict:
     created = 0
     updated = 0
@@ -33,15 +36,35 @@ def save_signals(items: Iterable[dict]) -> dict:
     return {"created": created, "updated": updated}
 
 
-def get_signals(segment: str | None = None, limit: int = 30) -> list[TelegramSignal]:
-    with SessionLocal() as session:
-        stmt = select(TelegramSignal)
-        if segment:
-            stmt = stmt.where(TelegramSignal.segment == segment)
-        level_order = case(
-            (TelegramSignal.signal_level == "high", 3),
-            (TelegramSignal.signal_level == "medium", 2),
-            else_=1,
+def _base_stmt(segment: str | None = None, only_actionable: bool = False):
+    stmt = select(TelegramSignal)
+    if segment:
+        stmt = stmt.where(TelegramSignal.segment == segment)
+    if only_actionable:
+        stmt = stmt.where(
+            TelegramSignal.is_actionable.is_(True),
+            TelegramSignal.message_type.in_(ACTIONABLE_TYPES),
         )
-        stmt = stmt.order_by(desc(level_order), desc(TelegramSignal.signal_score), desc(TelegramSignal.message_date), desc(TelegramSignal.created_at)).limit(limit)
+    level_order = case(
+        (TelegramSignal.signal_level == "high", 3),
+        (TelegramSignal.signal_level == "medium", 2),
+        else_=1,
+    )
+    return stmt.order_by(
+        desc(TelegramSignal.is_actionable),
+        desc(level_order),
+        desc(TelegramSignal.contactability_score),
+        desc(TelegramSignal.intent_score),
+        desc(TelegramSignal.pain_score),
+        desc(TelegramSignal.signal_score),
+        desc(TelegramSignal.message_date),
+        desc(TelegramSignal.created_at),
+    )
+
+
+def get_signals(segment: str | None = None, limit: int | None = None, only_actionable: bool = False) -> list[TelegramSignal]:
+    with SessionLocal() as session:
+        stmt = _base_stmt(segment=segment, only_actionable=only_actionable)
+        if limit is not None:
+            stmt = stmt.limit(limit)
         return list(session.execute(stmt).scalars().all())

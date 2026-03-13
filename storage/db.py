@@ -39,6 +39,18 @@ REQUIRED_COLUMNS = {
     "root_domain": "ALTER TABLE leads ADD COLUMN root_domain VARCHAR",
 }
 
+TELEGRAM_SIGNAL_REQUIRED_COLUMNS = {
+    "message_type": "ALTER TABLE telegram_signals ADD COLUMN message_type VARCHAR",
+    "icp_score": "ALTER TABLE telegram_signals ADD COLUMN icp_score INTEGER DEFAULT 0",
+    "pain_score": "ALTER TABLE telegram_signals ADD COLUMN pain_score INTEGER DEFAULT 0",
+    "intent_score": "ALTER TABLE telegram_signals ADD COLUMN intent_score INTEGER DEFAULT 0",
+    "contactability_score": "ALTER TABLE telegram_signals ADD COLUMN contactability_score INTEGER DEFAULT 0",
+    "is_actionable": "ALTER TABLE telegram_signals ADD COLUMN is_actionable BOOLEAN DEFAULT 0",
+    "contact_hint": "ALTER TABLE telegram_signals ADD COLUMN contact_hint VARCHAR",
+    "company_hint": "ALTER TABLE telegram_signals ADD COLUMN company_hint VARCHAR",
+    "website_hint": "ALTER TABLE telegram_signals ADD COLUMN website_hint VARCHAR",
+}
+
 
 def _ensure_columns():
     inspector = inspect(engine)
@@ -60,6 +72,25 @@ def _ensure_columns():
         conn.execute(text("UPDATE leads SET contact_confidence = COALESCE(contact_confidence, CASE WHEN company_inn IS NOT NULL OR company_legal_name IS NOT NULL THEN 'high' WHEN company_email IS NOT NULL AND company_phone IS NOT NULL THEN 'medium' WHEN company_email IS NOT NULL OR company_phone IS NOT NULL THEN 'low' ELSE 'low' END)"))
 
 
+def _ensure_telegram_signal_columns():
+    inspector = inspect(engine)
+    if "telegram_signals" not in inspector.get_table_names():
+        return
+
+    columns = {col["name"] for col in inspector.get_columns("telegram_signals")}
+    with engine.begin() as conn:
+        for name, ddl in TELEGRAM_SIGNAL_REQUIRED_COLUMNS.items():
+            if name not in columns:
+                conn.execute(text(ddl))
+
+        conn.execute(text("UPDATE telegram_signals SET icp_score = COALESCE(icp_score, 0)"))
+        conn.execute(text("UPDATE telegram_signals SET pain_score = COALESCE(pain_score, 0)"))
+        conn.execute(text("UPDATE telegram_signals SET intent_score = COALESCE(intent_score, 0)"))
+        conn.execute(text("UPDATE telegram_signals SET contactability_score = COALESCE(contactability_score, 0)"))
+        conn.execute(text("UPDATE telegram_signals SET is_actionable = COALESCE(is_actionable, 0)"))
+
+
 def init_db():
     Base.metadata.create_all(bind=engine)
     _ensure_columns()
+    _ensure_telegram_signal_columns()

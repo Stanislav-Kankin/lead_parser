@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from datetime import datetime
 
-from sqlalchemy import Column, DateTime, Integer, String, Text
+from sqlalchemy import Boolean, Column, DateTime, Integer, String, Text
 
 from models.lead import Base
 
@@ -29,6 +29,16 @@ class TelegramSignal(Base):
     message_text = Column(Text, nullable=True)
     text_excerpt = Column(Text, nullable=True)
     matched_keywords = Column(Text, nullable=True)
+
+    message_type = Column(String, nullable=True)
+    icp_score = Column(Integer, nullable=False, default=0)
+    pain_score = Column(Integer, nullable=False, default=0)
+    intent_score = Column(Integer, nullable=False, default=0)
+    contactability_score = Column(Integer, nullable=False, default=0)
+    is_actionable = Column(Boolean, nullable=False, default=False)
+    contact_hint = Column(String, nullable=True)
+    company_hint = Column(String, nullable=True)
+    website_hint = Column(String, nullable=True)
 
     signal_score = Column(Integer, nullable=False, default=0)
     signal_level = Column(String, nullable=True)

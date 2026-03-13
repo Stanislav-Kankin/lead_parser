@@ -1,10 +1,11 @@
 import asyncio
+import html
 import math
 from datetime import datetime
 
 from aiogram import F, Router
 from aiogram.filters import Command
-from aiogram.types import CallbackQuery, Message
+from aiogram.types import CallbackQuery, FSInputFile, Message
 
 from bot.keyboards import PAGE_SIZE, main_menu, pagination_keyboard, telegram_signals_menu
 from enrichment.domain_analyzer import analyze_domain
@@ -14,6 +15,7 @@ from scoring.icp_classifier import classify_icp
 from sources.domain_search import search_domains_multi
 from sources.query_builder import build_queries
 from storage.lead_repository import get_last_leads, save_leads
+from telegram_signals.exporter import build_signals_export
 from telegram_signals.repository import get_signals
 from telegram_signals.service import collect_signals
 from utils.domain_normalizer import normalize_domain
@@ -22,12 +24,218 @@ router = Router()
 SEARCH_RESULTS_CACHE: dict[int, list[dict]] = {}
 
 
+TG_MESSAGE_LIMIT = 3900
+TEXT_EXCERPT_LIMIT = 280
+OPENER_LIMIT = 220
+
+
+def _trim_text(value: str | None, limit: int) -> str:
+    value = (value or "").strip()
+    if len(value) <= limit:
+        return value or "-"
+    return value[: limit - 1].rstrip() + "…"
+
+
+async def _send_or_edit(callback: CallbackQuery, text: str, reply_markup=None) -> None:
+    try:
+        await callback.message.edit_text(
+            text,
+            parse_mode="HTML",
+            disable_web_page_preview=True,
+            reply_markup=reply_markup,
+        )
+    except Exception:
+        await callback.message.answer(
+            text,
+            parse_mode="HTML",
+            disable_web_page_preview=True,
+            reply_markup=reply_markup,
+        )
+
+
+def _build_signal_page(items, page: int, total_pages: int, segment_label: str, actionable: bool = False) -> str:
+    title = "Актуальные лиды из Telegram" if actionable else "Telegram-сигналы"
+    counter_label = "Всего лидов" if actionable else "Всего сигналов"
+    lines = [
+        f"<b>{title}</b>\n"
+        f"<b>Сегмент:</b> {escape_html(segment_label)}\n"
+        f"<b>Страница:</b> {page + 1}/{total_pages}\n"
+        f"<b>{counter_label}:</b> {len(items)}"
+    ]
+    chunk = items[page * PAGE_SIZE:(page + 1) * PAGE_SIZE]
+    for idx, item in enumerate(chunk, start=page * PAGE_SIZE + 1):
+        card = format_signal_card(idx, item)
+        candidate = "\n\n".join(lines + [card])
+        if len(candidate) > TG_MESSAGE_LIMIT and len(lines) > 1:
+            break
+        lines.append(card)
+    return "\n\n".join(lines)
+
+
+RU_SEGMENTS = {
+    "ecom_marketplace_pain": "WB / Ozon боль",
+    "ecom_direct_growth": "Свой сайт / Direct",
+    "manufacturer_secondary": "Производители",
+    "all": "Все",
+}
+
+
+def escape_html(value: str | None) -> str:
+    return html.escape(value or "-")
+
+
+def _ru_segment(segment: str) -> str:
+    return RU_SEGMENTS.get(segment, segment)
+
+
+def _parse_page(value: str | None) -> int:
+    try:
+        return max(0, int((value or "").split(":")[-1]))
+    except ValueError:
+        return 0
+
+
+def _ru_lead_type(value: str | None) -> str:
+    mapping = {
+        "manufacturer": "Производитель",
+        "brand": "Бренд",
+        "ecommerce": "E-commerce",
+        "unknown": "Не определён",
+    }
+    return mapping.get(value or "", value or "-")
+
+
+def _ru_priority(value: str | None) -> str:
+    mapping = {"high": "Высокий", "medium": "Средний", "low": "Низкий"}
+    return mapping.get(value or "", value or "-")
+
+
+def _ru_signal_level(value: str | None) -> str:
+    mapping = {"high": "Высокий", "medium": "Средний", "low": "Низкий"}
+    return mapping.get(value or "", value or "-")
+
+
+def _ru_signal_type(value: str | None) -> str:
+    mapping = {
+        "pain": "Боль / экономика",
+        "need_contractor": "Запрос подрядчика",
+        "direct_growth": "Рост direct / сайта",
+        "brand_signal": "Бренд / производитель",
+        "service_ad": "Самореклама услуг",
+        "vacancy": "Вакансия",
+        "noise": "Шум",
+    }
+    return mapping.get(value or "", value or "-")
+
+
+def _pick_value(data: dict | None, key: str):
+    if not data:
+        return None
+    value = data.get(key)
+    if value is None:
+        return None
+    if isinstance(value, str):
+        value = value.strip()
+    return value or None
+
+
+def _build_contacts_source(helper_data: dict | None, analysis: dict | None) -> str | None:
+    parts: list[str] = []
+    if analysis:
+        if analysis.get("email"):
+            parts.append("site_email")
+        if analysis.get("phone"):
+            parts.append("site_phone")
+    if helper_data:
+        if helper_data.get("email"):
+            parts.append("helper_email")
+        if helper_data.get("phone"):
+            parts.append("helper_phone")
+    return ", ".join(parts) if parts else None
+
+
+def _get_contact_confidence(company_inn: str | None, company_legal_name: str | None, company_email: str | None, company_phone: str | None) -> str:
+    if company_inn or company_legal_name:
+        return "high"
+    if company_email and company_phone:
+        return "medium"
+    if company_email or company_phone:
+        return "low"
+    return "low"
+
+
+def format_signal_card(idx: int, item) -> str:
+    dt = item.message_date.strftime("%Y-%m-%d %H:%M") if item.message_date else "-"
+    contact_block = []
+    if item.contact_hint:
+        contact_block.append(f"<b>Контакт:</b> {escape_html(item.contact_hint)}")
+    if item.company_hint:
+        contact_block.append(f"<b>Компания:</b> {escape_html(item.company_hint)}")
+    if item.website_hint:
+        contact_block.append(f"<b>Сайт:</b> {escape_html(item.website_hint)}")
+    contact_text = "\n".join(contact_block)
+    if contact_text:
+        contact_text += "\n"
+
+    return (
+        f"<b>{idx}. {escape_html(item.chat_title)}</b>\n"
+        f"<b>Сегмент:</b> {escape_html(_ru_segment(item.segment or '-'))}\n"
+        f"<b>Тип:</b> {escape_html(_ru_signal_type(getattr(item, 'message_type', None)))}\n"
+        f"<b>Actionable:</b> {'Да' if getattr(item, 'is_actionable', False) else 'Нет'}\n"
+        f"<b>Уровень:</b> {escape_html(_ru_signal_level(item.signal_level))}\n"
+        f"<b>Счёт:</b> {item.signal_score}\n"
+        f"<b>ICP/Pain/Intent/Contact:</b> {getattr(item, 'icp_score', 0)}/{getattr(item, 'pain_score', 0)}/{getattr(item, 'intent_score', 0)}/{getattr(item, 'contactability_score', 0)}\n"
+        f"<b>Чат:</b> {escape_html(item.chat_username or '-')}\n"
+        f"<b>Автор:</b> {escape_html(item.author_username or '-')}\n"
+        f"<b>Дата:</b> {dt}\n"
+        f"<b>Совпадения:</b> {escape_html(item.matched_keywords or '-')}\n"
+        f"{contact_text}"
+        f"<b>Фрагмент:</b> {escape_html(_trim_text(item.text_excerpt, TEXT_EXCERPT_LIMIT))}\n"
+        f"<b>Заход:</b> {escape_html(_trim_text(item.recommended_opener, OPENER_LIMIT))}\n"
+        f"<b>Ссылка на чат:</b> {escape_html(item.chat_url or '-')}"
+    )
+
+
+def format_lead_card(idx: int, item: dict) -> str:
+    contact_parts = []
+    if item.get("company_email"):
+        contact_parts.append(f"email: {item['company_email']}")
+    if item.get("company_phone"):
+        contact_parts.append(f"phone: {item['company_phone']}")
+    contacts = ", ".join(contact_parts) if contact_parts else "-"
+
+    legal_parts = []
+    if item.get("company_legal_name"):
+        legal_parts.append(item["company_legal_name"])
+    if item.get("company_inn"):
+        legal_parts.append(f"ИНН {item['company_inn']}")
+    if item.get("company_ogrn"):
+        legal_parts.append(f"ОГРН {item['company_ogrn']}")
+    legal_info = " | ".join(legal_parts) if legal_parts else "-"
+
+    return (
+        f"<b>{idx}. {escape_html(item.get('company_name') or item.get('domain') or '-')}</b>\n"
+        f"<b>Домен:</b> {escape_html(item.get('domain') or '-')}\n"
+        f"<b>Title:</b> {escape_html(item.get('title') or '-')}\n"
+        f"<b>ICP:</b> {'Да' if item.get('is_icp') else 'Нет'} ({escape_html(item.get('priority_ru') or '-')})\n"
+        f"<b>Тип:</b> {escape_html(item.get('lead_type_ru') or '-')}\n"
+        f"<b>Причина:</b> {escape_html(item.get('icp_reason') or '-')}\n"
+        f"<b>Гипотеза:</b> {escape_html(item.get('hypothesis') or '-')}\n"
+        f"<b>Заход:</b> {escape_html(item.get('opener') or '-')}\n"
+        f"<b>Компания:</b> {escape_html(legal_info)}\n"
+        f"<b>Контакты:</b> {escape_html(contacts)}\n"
+        f"<b>Источник контактов:</b> {escape_html(item.get('contacts_source') or '-')}\n"
+        f"<b>Уверенность:</b> {escape_html(item.get('contact_confidence') or '-')}"
+    )
+
+
 @router.message(Command("start"))
 async def start(message: Message):
     await message.answer(
         "<b>Lead Parser</b>\n\n"
-        "Нажми на inline-кнопку ниже или просто пришли поисковый запрос.\n"
-        "Пример: производитель косметики",
+        "1. Нажми <b>Найти компании</b> и пришли поисковый запрос\n"
+        "2. Или открой <b>Telegram сигналы</b> для Telegram Signal Miner\n"
+        "3. Бот проанализирует компании и покажет лиды с контактами",
         reply_markup=main_menu(),
         parse_mode="HTML",
     )
@@ -57,34 +265,53 @@ async def tg_signals_menu_handler(callback: CallbackQuery):
 async def tg_collect(callback: CallbackQuery):
     segment = (callback.data or "").split(":", 1)[1]
     segment_ru = _ru_segment(segment)
+    await callback.answer("Запускаю поиск...", show_alert=False)
     await callback.message.answer(
         f"Запускаю поиск Telegram-сигналов: <b>{escape_html(segment_ru)}</b>",
         parse_mode="HTML",
     )
     try:
-        result = await collect_signals(segment, per_query_limit=20)
+        result = await collect_signals(segment)
     except Exception as e:
         await callback.message.answer(
             f"Ошибка Telegram-поиска: {escape_html(str(e))}",
             parse_mode="HTML",
         )
-        await callback.answer()
         return
 
     await callback.message.answer(
-        f"Поиск завершён. Создано: <b>{result['created']}</b>, обновлено: <b>{result['updated']}</b>.",
+        f"Поиск завершён. Создано: <b>{result['created']}</b>, обновлено: <b>{result['updated']}</b>.\n"
+        f"Просканировано чатов: <b>{result['scanned_chats']}</b>, сообщений: <b>{result['scanned_messages']}</b>.",
         parse_mode="HTML",
         reply_markup=telegram_signals_menu(),
     )
-    await callback.answer()
+
+
+@router.callback_query(F.data.startswith("tg_export:"))
+async def tg_export(callback: CallbackQuery):
+    mode = (callback.data or "").split(":", 1)[1]
+    await callback.answer("Собираю Excel...", show_alert=False)
+    path = build_signals_export(mode=mode)
+    caption = "Готово: export по актуальным лидам." if mode == "actionable" else "Готово: raw export по сигналам."
+    await callback.message.answer_document(FSInputFile(path), caption=caption)
 
 
 @router.callback_query(F.data.startswith("tg_list:"))
 async def tg_list(callback: CallbackQuery):
-    _, page_raw, segment = (callback.data or "").split(":", 2)
-    page = max(0, int(page_raw))
+    parts = (callback.data or "").split(":")
+    if len(parts) != 3:
+        await callback.answer("Некорректный callback", show_alert=True)
+        return
+
+    _, second, third = parts
+    if second.isdigit() or second == "all":
+        page_raw, segment = second, third
+    else:
+        segment, page_raw = second, third
+
+    page = 0 if page_raw == "all" else max(0, int(page_raw))
     segment_filter = None if segment == "all" else segment
-    items = get_signals(segment=segment_filter, limit=50)
+    items = get_signals(segment=segment_filter, limit=None)
     if not items:
         await callback.message.answer("Пока Telegram-сигналов нет. Сначала запусти поиск по одному из сегментов.")
         await callback.answer()
@@ -98,6 +325,7 @@ async def tg_list(callback: CallbackQuery):
         f"<b>Telegram-сигналы</b>\n"
         f"<b>Сегмент:</b> {escape_html(_ru_segment(segment_filter or 'all'))}\n"
         f"<b>Страница:</b> {page + 1}/{total_pages}\n"
+        f"<b>Всего сигналов:</b> {len(items)}"
     ]
     for idx, item in enumerate(chunk, start=page * PAGE_SIZE + 1):
         lines.append(format_signal_card(idx, item))
@@ -107,6 +335,39 @@ async def tg_list(callback: CallbackQuery):
         parse_mode="HTML",
         disable_web_page_preview=True,
         reply_markup=pagination_keyboard("tg_list", page, total_pages, extra=(segment_filter or "all")),
+    )
+    await callback.answer()
+
+
+@router.callback_query(F.data.startswith("tg_actionable:"))
+async def tg_actionable(callback: CallbackQuery):
+    _, page_raw, segment = (callback.data or "").split(":", 2)
+    page = max(0, int(page_raw))
+    segment_filter = None if segment == "all" else segment
+    items = get_signals(segment=segment_filter, limit=None, only_actionable=True)
+    if not items:
+        await callback.message.answer("Пока актуальных лидов нет. Сначала запусти поиск по сегменту.")
+        await callback.answer()
+        return
+
+    total_pages = max(1, math.ceil(len(items) / PAGE_SIZE))
+    page = min(page, total_pages - 1)
+    chunk = items[page * PAGE_SIZE:(page + 1) * PAGE_SIZE]
+
+    lines = [
+        f"<b>Актуальные лиды из Telegram</b>\n"
+        f"<b>Сегмент:</b> {escape_html(_ru_segment(segment_filter or 'all'))}\n"
+        f"<b>Страница:</b> {page + 1}/{total_pages}\n"
+        f"<b>Всего лидов:</b> {len(items)}"
+    ]
+    for idx, item in enumerate(chunk, start=page * PAGE_SIZE + 1):
+        lines.append(format_signal_card(idx, item))
+
+    await callback.message.answer(
+        "\n\n".join(lines),
+        parse_mode="HTML",
+        disable_web_page_preview=True,
+        reply_markup=pagination_keyboard("tg_actionable", page, total_pages, extra=(segment_filter or "all")),
     )
     await callback.answer()
 
@@ -258,20 +519,20 @@ async def handle_query(message: Message):
         contacts_source = _build_contacts_source(helper_data, analysis)
         contact_confidence = _get_contact_confidence(company_inn, company_legal_name, company_email, company_phone)
 
-        lead = {
+        lead_row = {
             "query": query,
-            "company_name": company_name or analysis.get("title") or domain,
-            "domain": domain,
+            "company_name": company_name,
+            "domain": item.get("domain"),
+            "domain_normalized": domain,
+            "root_domain": domain,
             "source": item.get("source", "ddgs"),
             "title": analysis.get("title"),
             "is_icp": icp["is_icp"],
-            "icp_reason": icp["icp_reason"],
-            "lead_type": icp["lead_type"],
-            "lead_type_ru": icp["lead_type_ru"],
-            "priority": icp["priority"],
-            "priority_ru": icp["priority_ru"],
+            "icp_reason": icp["reason"],
             "hypothesis": hypothesis,
             "opener": opener,
+            "lead_type": icp["lead_type"],
+            "priority": icp["priority"],
             "company_inn": company_inn,
             "company_ogrn": company_ogrn,
             "company_legal_name": company_legal_name,
@@ -279,221 +540,53 @@ async def handle_query(message: Message):
             "inn_source": inn_source,
             "company_email": company_email,
             "company_phone": company_phone,
-            "employees": _pick_value(helper_data, "employees"),
             "contacts_source": contacts_source,
             "contact_confidence": contact_confidence,
             "has_contacts": has_contacts,
             "sales_ready": bool(icp["is_icp"] and has_contacts),
-            "last_enriched_at": datetime.utcnow() if helper_data else None,
+            "updated_at": datetime.utcnow(),
+            "last_enriched_at": datetime.utcnow(),
         }
-
-        leads_to_save.append(lead)
-        display_items.append(lead)
-
-    display_items.sort(
-        key=lambda x: (
-            x.get("sales_ready", False),
-            x.get("is_icp", False),
-            x.get("contact_confidence") == "high",
-            x.get("priority") == "high",
-        ),
-        reverse=True,
-    )
-
-    save_stats = save_leads(leads_to_save) if leads_to_save else {"created": 0, "updated": 0}
-
-    total_pages = max(1, math.ceil(len(display_items) / PAGE_SIZE)) if display_items else 1
-    first_page_items = display_items[:PAGE_SIZE]
-
-    if not first_page_items:
-        await message.answer(
-            "Ничего рабочего не найдено.\n"
-            "Сейчас в выдаче остаются только компании, у которых нашлись контакты."
+        leads_to_save.append(lead_row)
+        display_items.append(
+            {
+                "domain": domain,
+                "company_name": company_name,
+                "title": analysis.get("title"),
+                "is_icp": icp["is_icp"],
+                "lead_type_ru": _ru_lead_type(icp["lead_type"]),
+                "priority_ru": _ru_priority(icp["priority"]),
+                "icp_reason": icp["reason"],
+                "hypothesis": hypothesis,
+                "opener": opener,
+                "company_inn": company_inn,
+                "company_ogrn": company_ogrn,
+                "company_legal_name": company_legal_name,
+                "legal_form": legal_form,
+                "inn_source": inn_source,
+                "company_email": company_email,
+                "company_phone": company_phone,
+                "contacts_source": contacts_source,
+                "contact_confidence": contact_confidence,
+            }
         )
+
+    if not leads_to_save:
+        await message.answer("Компании нашлись, но без контактов. Попробуй другой запрос.")
         return
 
-    response_lines = [f"<b>Найденные компании</b>\n<b>Страница:</b> 1/{total_pages}\n"]
-    for idx, lead in enumerate(first_page_items, start=1):
-        response_lines.append(format_lead_card(idx, lead))
+    save_leads(leads_to_save)
+    total_pages = max(1, math.ceil(len(display_items) / PAGE_SIZE))
+    first_chunk = display_items[:PAGE_SIZE]
 
-    icp_count = sum(1 for item in display_items if item.get("is_icp"))
-    with_inn = sum(1 for item in display_items if item.get("company_inn"))
-    response_lines.append(
-        "\n<b>Итог:</b>\n"
-        f"<b>Всего найдено доменов:</b> {len(raw_results)}\n"
-        f"<b>Показано с контактами:</b> {len(display_items)}\n"
-        f"<b>ICP среди показанных:</b> {icp_count}\n"
-        f"<b>С найденным ИНН:</b> {with_inn}\n"
-        f"<b>Создано новых лидов:</b> {save_stats['created']}\n"
-        f"<b>Обновлено существующих:</b> {save_stats['updated']}"
-    )
+    text = [f"<b>Найденные компании</b>\n<b>Страница:</b> 1/{total_pages}\n"]
+    for idx, lead in enumerate(first_chunk, start=1):
+        text.append(format_lead_card(idx, lead))
 
     sent = await message.answer(
-        "\n\n".join(response_lines),
+        "\n\n".join(text),
         parse_mode="HTML",
         disable_web_page_preview=True,
         reply_markup=pagination_keyboard("search_page", 0, total_pages),
     )
     SEARCH_RESULTS_CACHE[sent.message_id] = display_items
-
-
-
-def format_lead_card(idx: int, lead: dict) -> str:
-    return (
-        f"<b>{idx}. {escape_html(lead.get('domain') or '-')}</b>\n"
-        f"<b>Название:</b> {escape_html(_short(lead.get('company_name') or lead.get('title') or '-'))}\n"
-        f"<b>ICP:</b> {'Да' if lead.get('is_icp') else 'Нет'}\n"
-        f"<b>Тип:</b> {escape_html(lead.get('lead_type_ru') or _ru_lead_type(lead.get('lead_type')))}\n"
-        f"<b>Приоритет:</b> {escape_html(lead.get('priority_ru') or _ru_priority(lead.get('priority')))}\n\n"
-        f"<b>Контакты</b>\n"
-        f"<b>Email:</b> {escape_html(lead.get('company_email') or '-')}\n"
-        f"<b>Телефон:</b> {escape_html(lead.get('company_phone') or '-')}\n"
-        f"<b>Источник контакта:</b> {escape_html(lead.get('contacts_source') or '-')}\n"
-        f"<b>Надёжность контакта:</b> {escape_html(_ru_confidence(lead.get('contact_confidence')))}\n\n"
-        f"<b>Реквизиты</b>\n"
-        f"<b>ИНН:</b> {escape_html(lead.get('company_inn') or '-')}\n"
-        f"<b>ОГРН:</b> {escape_html(lead.get('company_ogrn') or '-')}\n"
-        f"<b>Юр. лицо:</b> {escape_html(_short(lead.get('company_legal_name') or '-', 120))}\n"
-        f"<b>Форма:</b> {escape_html(lead.get('legal_form') or '-')}\n"
-        f"<b>Источник ИНН:</b> {escape_html(_ru_inn_source(lead.get('inn_source')))}\n\n"
-        f"<b>Гипотеза</b>\n"
-        f"<b>Гипотеза:</b> {escape_html(lead.get('hypothesis') or '-')}\n"
-        f"<b>Заход:</b> {escape_html(_short(lead.get('opener') or '-', 220))}\n\n"
-        f"<b>Сигналы</b>\n"
-        f"{escape_html(_human_reason(lead.get('icp_reason') or '-'))}"
-    )
-
-
-
-def format_signal_card(idx: int, signal) -> str:
-    return (
-        f"<b>{idx}. {escape_html(signal.chat_title or '-')}</b>\n"
-        f"<b>Сегмент:</b> {escape_html(_ru_segment(signal.segment))}\n"
-        f"<b>Уровень:</b> {escape_html(_ru_signal_level(signal.signal_level))}\n"
-        f"<b>Счёт:</b> {signal.signal_score}\n"
-        f"<b>Чат:</b> {escape_html(signal.chat_username or '-')}\n"
-        f"<b>Автор:</b> {escape_html(signal.author_username or signal.author_name or '-')}\n"
-        f"<b>Дата:</b> {escape_html(str(signal.message_date)[:16] if signal.message_date else '-')}\n"
-        f"<b>Совпадения:</b> {escape_html(signal.matched_keywords or '-')}\n"
-        f"<b>Фрагмент:</b> {escape_html(_short(signal.text_excerpt or '-', 220))}\n"
-        f"<b>Заход:</b> {escape_html(_short(signal.recommended_opener or '-', 220))}\n"
-        f"<b>Ссылка на чат:</b> {escape_html(signal.chat_url or '-')}"
-    )
-
-
-
-def _pick_value(data: dict | None, key: str) -> str | None:
-    if not data:
-        return None
-    value = data.get(key)
-    if value is None:
-        return None
-    value = str(value).strip()
-    return value or None
-
-
-
-def _build_contacts_source(helper_data: dict | None, analysis: dict) -> str:
-    has_site = bool(analysis.get("email") or analysis.get("phone"))
-    has_helper = bool(helper_data and (helper_data.get("email") or helper_data.get("phone")))
-
-    if has_site and has_helper:
-        return "site + helper_api"
-    if has_site:
-        return "site"
-    if has_helper:
-        strategy = helper_data.get("lookup_strategy")
-        if strategy == "root_domain":
-            return "helper_api (root domain)"
-        return "helper_api"
-    return "-"
-
-
-
-def _get_contact_confidence(inn: str | None, legal_name: str | None, email: str | None, phone: str | None) -> str:
-    if inn or legal_name:
-        return "high"
-    if email and phone:
-        return "medium"
-    if email or phone:
-        return "low"
-    return "low"
-
-
-
-def _parse_page(payload: str | None) -> int:
-    try:
-        return max(0, int((payload or "").split(":", 1)[1]))
-    except Exception:
-        return 0
-
-
-
-def _short(value: str, limit: int = 140) -> str:
-    return value if len(value) <= limit else value[: limit - 1] + "…"
-
-
-
-def _ru_lead_type(value: str | None) -> str:
-    mapping = {
-        "manufacturer_or_b2b": "Производитель / B2B",
-        "possible_icp": "Потенциальный ICP",
-        "low_relevance": "Низкая релевантность",
-    }
-    return mapping.get(value or "", value or "-")
-
-
-
-def _ru_priority(value: str | None) -> str:
-    mapping = {"high": "Высокий", "medium": "Средний", "low": "Низкий"}
-    return mapping.get(value or "", value or "-")
-
-
-
-def _ru_confidence(value: str | None) -> str:
-    mapping = {"high": "Высокая", "medium": "Средняя", "low": "Низкая"}
-    return mapping.get(value or "", value or "-")
-
-
-
-def _ru_inn_source(value: str | None) -> str:
-    mapping = {"site_requisites": "Сайт / реквизиты"}
-    return mapping.get(value or "", value or "-")
-
-
-
-def _ru_segment(value: str | None) -> str:
-    mapping = {
-        "all": "Все",
-        "ecom_marketplace_pain": "WB / Ozon боль",
-        "ecom_direct_growth": "Свой сайт / Direct",
-        "manufacturer_secondary": "Производители",
-    }
-    return mapping.get(value or "", value or "-")
-
-
-
-def _ru_signal_level(value: str | None) -> str:
-    mapping = {"high": "Высокий", "medium": "Средний", "low": "Низкий"}
-    return mapping.get(value or "", value or "-")
-
-
-
-def _human_reason(reason: str) -> str:
-    if "positive:" not in reason and "negative:" not in reason:
-        return reason
-    positive = "-"
-    negative = "-"
-    try:
-        if "positive:" in reason:
-            positive = reason.split("positive:", 1)[1].split("|", 1)[0].replace(";", ",").replace("negative:", "").strip()
-        if "negative:" in reason:
-            negative = reason.split("negative:", 1)[1].strip()
-    except Exception:
-        return reason
-    return f"+ {positive or '-'}\\n- {negative or '-'}"
-
-
-
-def escape_html(value: str) -> str:
-    return value.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")

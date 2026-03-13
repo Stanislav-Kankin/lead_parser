@@ -1,6 +1,6 @@
 from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
 
-PAGE_SIZE = 5
+PAGE_SIZE = 3
 
 
 def main_menu() -> InlineKeyboardMarkup:
@@ -19,7 +19,12 @@ def telegram_signals_menu() -> InlineKeyboardMarkup:
             [InlineKeyboardButton(text="🛒 WB / Ozon боль", callback_data="tg_collect:ecom_marketplace_pain")],
             [InlineKeyboardButton(text="🌐 Свой сайт / Direct", callback_data="tg_collect:ecom_direct_growth")],
             [InlineKeyboardButton(text="🏭 Производители", callback_data="tg_collect:manufacturer_secondary")],
-            [InlineKeyboardButton(text="🔥 Последние сигналы", callback_data="tg_list:all:0")],
+            [InlineKeyboardButton(text="🔥 Последние сигналы", callback_data="tg_list:0:all")],
+            [InlineKeyboardButton(text="🎯 Актуальные лиды", callback_data="tg_actionable:0:all")],
+            [
+                InlineKeyboardButton(text="📤 Excel лиды", callback_data="tg_export:actionable"),
+                InlineKeyboardButton(text="📦 Excel raw", callback_data="tg_export:raw"),
+            ],
         ]
     )
 

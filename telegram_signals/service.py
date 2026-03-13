@@ -11,6 +11,41 @@ from telegram_signals.repository import save_signals
 
 logger = logging.getLogger(__name__)
 
+IGNORED_CHAT_MARKERS = [
+    "travel",
+    "банк",
+    "bank",
+    "design",
+    "дизайн",
+    "скид",
+    "купон",
+    "вакан",
+    "резюме",
+    "работа",
+    "курс",
+    "обуч",
+    "crypto",
+    "крипт",
+    "game",
+    "игр",
+]
+
+PREFERRED_CHAT_MARKERS = [
+    "wb",
+    "wildberries",
+    "ozon",
+    "маркетплейс",
+    "селлер",
+    "поставщик",
+    "бренд",
+    "ecom",
+    "ecommerce",
+    "интернет-магазин",
+    "производ",
+]
+
+ALLOWED_MESSAGE_TYPES = {"pain", "need_contractor", "direct_growth", "brand_signal"}
+
 
 def _chat_url(chat: Any) -> str | None:
     username = getattr(chat, "username", None)
@@ -28,6 +63,17 @@ def _author_username(message: Message) -> str | None:
     if sender:
         return getattr(sender, "username", None)
     return None
+
+
+def _is_relevant_chat(chat: Any) -> bool:
+    title = (_chat_title(chat) or "").lower()
+    username = (getattr(chat, "username", None) or "").lower()
+    haystack = f"{title} {username}".strip()
+    if not haystack:
+        return False
+    if any(marker in haystack for marker in IGNORED_CHAT_MARKERS):
+        return False
+    return any(marker in haystack for marker in PREFERRED_CHAT_MARKERS)
 
 
 async def _collect_messages_from_chat(client, chat, limit_per_chat: int) -> list[Message]:
@@ -63,6 +109,8 @@ async def collect_signals(segment: str, limit_chats: int = 12, limit_messages_pe
             for chat in chats:
                 chat_id = getattr(chat, "id", None)
                 if not chat_id or chat_id in seen_chat_ids:
+                    continue
+                if not _is_relevant_chat(chat):
                     continue
 
                 seen_chat_ids.add(chat_id)
@@ -100,11 +148,14 @@ async def collect_signals(segment: str, limit_chats: int = 12, limit_messages_pe
 
             for msg in messages:
                 text = (msg.message or "").strip()
-                if len(text) < 40:
+                if len(text) < 50:
                     continue
 
-                signal = classify_signal(text, segment)
+                author_username = _author_username(msg)
+                signal = classify_signal(text, segment, author_username=author_username)
                 if signal["level"] == "low":
+                    continue
+                if signal["message_type"] not in ALLOWED_MESSAGE_TYPES:
                     continue
 
                 kept_signals += 1
@@ -118,12 +169,21 @@ async def collect_signals(segment: str, limit_chats: int = 12, limit_messages_pe
                     "chat_url": _chat_url(chat),
                     "message_id": msg.id,
                     "message_date": msg.date,
-                    "author_id": str(getattr(getattr(msg, "sender_id", None), "user_id", getattr(msg, "sender_id", ""))) if getattr(msg, "sender_id", None) else None,
+                    "author_id": str(getattr(msg, "sender_id", "")) if getattr(msg, "sender_id", None) else None,
                     "author_name": None,
-                    "author_username": _author_username(msg),
+                    "author_username": author_username,
                     "message_text": text,
                     "text_excerpt": text[:280],
                     "matched_keywords": ",".join(signal["matches"]),
+                    "message_type": signal["message_type"],
+                    "icp_score": signal["icp_score"],
+                    "pain_score": signal["pain_score"],
+                    "intent_score": signal["intent_score"],
+                    "contactability_score": signal["contactability_score"],
+                    "is_actionable": signal["is_actionable"],
+                    "contact_hint": signal["contact_hint"],
+                    "company_hint": signal["company_hint"],
+                    "website_hint": signal["website_hint"],
                     "signal_score": signal["score"],
                     "signal_level": signal["level"],
                     "recommended_opener": signal["recommended_opener"],
