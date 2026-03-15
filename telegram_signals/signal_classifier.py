@@ -113,6 +113,40 @@ OWNER_CONTEXT_PATTERNS = [
 
 QUESTION_PATTERNS = ["кто", "как", "зачем", "почему", "посоветуйте", "подскажите"]
 
+CHANGE_EVENT_PATTERNS = [
+    "запускаем сайт",
+    "делаем сайт",
+    "запускаем интернет-магазин",
+    "хотим развивать сайт",
+    "хотим direct",
+    "ищем маркетолога",
+    "ищем подрядчика",
+    "ищем агентство",
+    "нужен подрядчик",
+    "нужен маркетолог",
+    "нужен директолог",
+    "нужен трафик",
+    "как лить трафик",
+    "как вести трафик",
+    "кто работал с direct",
+    "кто работал с сайтом",
+    "хотим меньше зависеть от wb",
+    "хотим меньше зависеть от ozon",
+]
+
+WEAK_REVIEW_PATTERNS = [
+    "экосистема чатов",
+    "ищете поставщика",
+    "закрытых чатах",
+    "пишите ценник",
+    "оптовики",
+    "поставщики",
+    "закупаем",
+    "продаем оптом",
+    "минимальный заказ",
+    "прайс",
+]
+
 
 def _contains_any(text_l: str, keywords: list[str]) -> list[str]:
     return [kw for kw in keywords if kw in text_l]
@@ -172,19 +206,54 @@ def _guess_conversation_type(text_l: str, has_intent: bool, has_pain: bool, auth
     return "discussion"
 
 
+def _detect_primary_pain_tag(full_l: str) -> str | None:
+    if any(x in full_l for x in ["не окупается", "не сходится", "дорогой трафик", "сливаем бюджет", "cac"]):
+        return "ads_not_profitable"
+    if any(x in full_l for x in ["wb", "ozon", "маркетплейс", "комиссия", "зависим"]):
+        return "marketplace_dependency"
+    if any(x in full_l for x in ["маржа", "юнит экономика", "юнит-экономика", "экономика проекта"]):
+        return "margin_pressure"
+    if any(x in full_l for x in ["сайт", "direct", "интернет-магазин", "трафик на сайт"]):
+        return "direct_growth_need"
+    if any(x in full_l for x in CHANGE_EVENT_PATTERNS):
+        return "change_event"
+    return None
+
+
 def build_recommended_opener(text_l: str, message_type: str, lead_fit: str) -> str:
+    pain_tag = _detect_primary_pain_tag(text_l)
     if lead_fit == "target":
+        if pain_tag == "ads_not_profitable":
+            return (
+                "Вижу, что у вас упирается экономика рекламы. Обычно проблема не только в канале, "
+                "а в том, как распределён спрос между маркетплейсами и direct."
+            )
+        if pain_tag == "marketplace_dependency":
+            return (
+                "Похоже, у вас есть зависимость от маркетплейсов. В таких кейсах обычно помогает не просто реклама, "
+                "а сборка управляемого direct-канала, чтобы не жить только за счёт WB/Ozon."
+            )
+        if pain_tag == "margin_pressure":
+            return (
+                "Вижу сигнал по марже и экономике. Я бы заходил не с услугой, а с гипотезой: где именно теряется ROMI "
+                "и можно ли вернуть рост через direct и более управляемый спрос."
+            )
+        if pain_tag in {"direct_growth_need", "change_event"}:
+            return (
+                "Вижу интерес к развитию сайта/direct. Здесь обычно важно быстро понять: сайт уже даёт продажи или "
+                "сейчас основная зависимость от маркетплейсов."
+            )
         return (
             "Заходить не с услугой, а с гипотезой: где именно съедается маржа, "
             "как снизить зависимость от маркетплейсов и собрать управляемый direct-канал."
         )
     if lead_fit == "review":
         return (
-            "Сначала проверить компанию и роль автора. Если это бренд или селлер с сайтом, "
+            "Сначала проверить компанию, сайт и роль автора. Если это бренд, производитель или seller, "
             "идти через гипотезу роста direct и экономики рекламы."
         )
     if message_type == "market_intelligence":
-        return "Это лучше использовать как рыночный инсайт и источник гипотез, а не как прямой outreach." 
+        return "Это лучше использовать как рыночный инсайт и источник гипотез, а не как прямой outreach."
     return "Нужен ручной разбор цепочки сообщений."
 
 
@@ -253,11 +322,15 @@ def classify_signal(
     market_hits = [p for p in MARKET_OBSERVATION_PATTERNS if p in text_l]
     supplier_hits = [p for p in SUPPLIER_AD_PATTERNS if p in text_l]
     channel_hits = [p for p in CHANNEL_AUTHOR_PATTERNS if p in text_l]
+    change_event_hits = [p for p in CHANGE_EVENT_PATTERNS if p in full_l]
+    weak_review_hits = [p for p in WEAK_REVIEW_PATTERNS if p in full_l]
 
     first_person_pain_score = len(first_person_hits) * 4
     pain_score = len(pain_hits) * 3 + first_person_pain_score
-    intent_score = len(intent_hits) * 4
+    intent_score = len(intent_hits) * 4 + len(change_event_hits) * 2
     icp_score = len(direct_hits) * 2 + len(brand_hits) * 2
+    if any(x in full_l for x in ["wb", "ozon", "маркетплейс", "селлер", "seller", "sku", "карточк", "интернет-магазин", "сайт"]):
+        icp_score += 2
 
     context_score = 0
     if context_text.strip():
@@ -282,6 +355,8 @@ def classify_signal(
     promo_penalty = 0
     if any(x in text_l for x in ["напишите в лс", "есть кейсы", "помогаем", "делаем под ключ", "инфографика", "дизайн карточек"]):
         promo_penalty += 6
+    if weak_review_hits:
+        promo_penalty += 5
     promo_penalty += len(expert_hits) * 2
     promo_penalty += len(channel_hits) * 2
 
@@ -292,11 +367,13 @@ def classify_signal(
         message_type = "noise"
     elif "вакан" in text_l or "резюме" in text_l:
         message_type = "vacancy"
-    elif supplier_hits:
+    elif supplier_hits or weak_review_hits:
         message_type = "supplier_ad"
-    elif author_type_guess == "contractor" and not pain_hits and not intent_hits:
+    elif author_type_guess == "contractor" and not pain_hits and not intent_hits and not change_event_hits:
         message_type = "service_ad"
-    elif first_person_hits and (pain_hits or intent_hits or direct_hits or brand_hits):
+    elif first_person_hits and (pain_hits or intent_hits or direct_hits or brand_hits or change_event_hits):
+        message_type = "self_pain"
+    elif change_event_hits and (direct_hits or brand_hits or intent_hits):
         message_type = "self_pain"
     elif any(x in full_l for x in ["кто посоветует", "посоветуйте", "кто работал", "подскажите", "есть ли смысл"]):
         message_type = "peer_question"
@@ -339,11 +416,11 @@ def classify_signal(
 
     segment_bonus = 0
     if segment == "ecom_marketplace_pain" and any(x in full_l for x in ["wildberries", "wb", "ozon", "маркетплейс"]):
-        segment_bonus += 2
-    if segment == "ecom_direct_growth" and direct_hits:
-        segment_bonus += 2
+        segment_bonus += 3
+    if segment == "ecom_direct_growth" and (direct_hits or change_event_hits):
+        segment_bonus += 3
     if segment == "manufacturer_secondary" and brand_hits:
-        segment_bonus += 2
+        segment_bonus += 3
 
     final_lead_score = (
         icp_score
@@ -374,6 +451,9 @@ def classify_signal(
         first_person_pain_score=first_person_pain_score,
         contactability_score=contactability_score,
         conversation_score=conversation_score,
+        pain_score=pain_score,
+        icp_score=icp_score,
+        intent_score=intent_score,
     )
     is_actionable = lead_fit == "target"
 
@@ -384,6 +464,8 @@ def classify_signal(
         reasons.append("есть боль по экономике/марже/зависимости")
     if intent_hits:
         reasons.append("есть запрос на решение или подрядчика")
+    if change_event_hits:
+        reasons.append("есть change-event: компания явно что-то меняет")
     if direct_hits:
         reasons.append("есть интерес к сайту или direct-каналу")
     if brand_hits:

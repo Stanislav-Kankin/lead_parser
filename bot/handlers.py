@@ -1,6 +1,6 @@
 import asyncio
 import math
-from datetime import datetime
+from datetime import datetime, timezone
 
 from aiogram import F, Router
 from aiogram.filters import Command
@@ -72,13 +72,37 @@ def _build_lead_summary(signal) -> str:
     return "Нужна ручная проверка контекста"
 
 
+def _recency_score(signal) -> int:
+    message_date = getattr(signal, "message_date", None)
+    if not message_date:
+        return 0
+    if getattr(message_date, "tzinfo", None) is None:
+        message_date = message_date.replace(tzinfo=timezone.utc)
+    now = datetime.now(timezone.utc)
+    age_days = max((now - message_date).days, 0)
+    if age_days <= 1:
+        return 5
+    if age_days <= 3:
+        return 4
+    if age_days <= 7:
+        return 3
+    if age_days <= 14:
+        return 2
+    if age_days <= 30:
+        return 1
+    return 0
+
+
 def _sales_priority(signal) -> tuple:
+    message_date = getattr(signal, "message_date", None) or datetime.min
     return (
+        _recency_score(signal),
         _safe_int(getattr(signal, "final_lead_score", 0)),
         _safe_int(getattr(signal, "pain_score", 0)),
         _safe_int(getattr(signal, "icp_score", 0)),
         _safe_int(getattr(signal, "contactability_score", 0)),
         -_safe_int(getattr(signal, "contractor_penalty", 0)),
+        message_date,
     )
 
 
@@ -280,6 +304,27 @@ async def tg_list(callback: CallbackQuery):
     if not items:
         await _send_or_edit(callback, "Пока Telegram-сигналов нет. Сначала запусти поиск по одному из сегментов.", reply_markup=telegram_signals_menu())
         await callback.answer()
+
+
+@router.callback_query(F.data.startswith("tg_targets:"))
+async def tg_targets(callback: CallbackQuery):
+    segment_filter, page = _parse_segment_page(callback.data or "")
+    items = _dedupe_signals_to_leads(get_target_leads(segment=segment_filter, limit=None))
+    if not items:
+        await _send_or_edit(callback, "Пока лидов для быстрого outreach нет. Сначала обнови один из сегментов.", reply_markup=telegram_signals_menu())
+        await callback.answer()
+        return
+
+    total_pages = len(items)
+    page = min(page, total_pages - 1)
+    text = _build_lead_page("🎯 Писать сейчас", items, page, total_pages, _ru_segment(segment_filter or "all"))
+
+    await _send_or_edit(
+        callback,
+        text,
+        reply_markup=sales_lead_keyboard("tg_targets", page, total_pages, items[page], extra=(segment_filter or "all")),
+    )
+    await callback.answer()
 
 
 @router.callback_query(F.data.startswith("tg_review:"))
@@ -656,9 +701,23 @@ def format_sales_lead_card(idx: int, signal) -> str:
     pain_hypothesis = _build_lead_summary(signal)
     context = _trim_text(getattr(signal, "text_excerpt", None) or getattr(signal, "message_text", None) or "-", 280)
     opener = _trim_text(getattr(signal, "recommended_opener", None) or "-", 220)
+    chat_name = getattr(signal, 'chat_title', None) or '-'
+    username_to_write = getattr(signal, 'author_username', None)
+    if username_to_write:
+        username_to_write = f"@{str(username_to_write).lstrip('@')}"
+    else:
+        username_to_write = "-"
+
+    message_date = getattr(signal, 'message_date', None)
+    actual_label = '-'
+    if message_date:
+        actual_label = message_date.strftime('%d.%m.%Y %H:%M')
+
     return (
         f"<b>{idx}. {escape_html(username)}</b>\n"
-        f"<b>Чат:</b> {escape_html(getattr(signal, 'chat_title', None) or '-')}\n"
+        f"<b>Кому писать:</b> {escape_html(username_to_write)}\n"
+        f"<b>Чат:</b> {escape_html(chat_name)}\n"
+        f"<b>Актуальность:</b> {escape_html(actual_label)}\n"
         f"<b>Сообщение:</b> {escape_html(context)}\n"
         f"<b>Контекст:</b> {escape_html(_trim_text(getattr(signal, 'why_actionable', None) or getattr(signal, 'conversation_type', None) or '-', 160))}\n"
         f"<b>Гипотеза боли:</b> {escape_html(pain_hypothesis)}\n"
