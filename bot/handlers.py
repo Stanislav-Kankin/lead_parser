@@ -4,9 +4,9 @@ from datetime import datetime
 
 from aiogram import F, Router
 from aiogram.filters import Command
-from aiogram.types import CallbackQuery, FSInputFile, Message
+from aiogram.types import CallbackQuery, FSInputFile, InlineKeyboardButton, InlineKeyboardMarkup, Message
 
-from bot.keyboards import PAGE_SIZE, main_menu, pagination_keyboard, telegram_signals_menu
+from bot.keyboards import PAGE_SIZE, main_menu, pagination_keyboard, telegram_signals_debug_menu, telegram_signals_menu
 from enrichment.domain_analyzer import analyze_domain
 from enrichment.inn_client import get_company_by_domain
 from scoring.hypothesis_classifier import build_hypothesis
@@ -30,6 +30,118 @@ router = Router()
 SEARCH_RESULTS_CACHE: dict[int, list[dict]] = {}
 
 TG_MESSAGE_LIMIT = 3900
+
+
+def _safe_int(value: object, default: int = 0) -> int:
+    try:
+        return int(value or 0)
+    except Exception:
+        return default
+
+
+def _build_contact_link(signal) -> str | None:
+    author_username = getattr(signal, "author_username", None)
+    if author_username:
+        username = str(author_username).lstrip("@")
+        return f"https://t.me/{username}"
+    return getattr(signal, "chat_url", None)
+
+
+def _lead_identity(signal) -> str:
+    if getattr(signal, "author_username", None):
+        return f"@{str(signal.author_username).lstrip('@')}"
+    if getattr(signal, "author_name", None):
+        return str(signal.author_name)
+    return getattr(signal, "chat_title", None) or "Без имени"
+
+
+def _build_lead_summary(signal) -> str:
+    pain = (getattr(signal, "pain_detected", None) or "").strip()
+    icp = (getattr(signal, "icp_detected", None) or "").strip()
+    bits = []
+    if pain:
+        bits.append(pain)
+    if icp:
+        bits.append(icp)
+    if bits:
+        return "; ".join(bits)
+    why = (getattr(signal, "why_actionable", None) or "").strip()
+    if why:
+        why = why.split(';')[0].strip()
+        return why[:160]
+    return "Нужна ручная проверка контекста"
+
+
+def _sales_priority(signal) -> tuple:
+    return (
+        _safe_int(getattr(signal, "final_lead_score", 0)),
+        _safe_int(getattr(signal, "pain_score", 0)),
+        _safe_int(getattr(signal, "icp_score", 0)),
+        _safe_int(getattr(signal, "contactability_score", 0)),
+        -_safe_int(getattr(signal, "contractor_penalty", 0)),
+    )
+
+
+def _dedupe_signals_to_leads(items) -> list:
+    leads = {}
+    for item in items:
+        key = (
+            (getattr(item, "author_username", None) or "").strip().lower(),
+            getattr(item, "chat_id", None),
+        )
+        if not key[0]:
+            key = (
+                (getattr(item, "author_name", None) or "").strip().lower(),
+                getattr(item, "chat_id", None),
+            )
+        if not key[0]:
+            key = (f"msg:{getattr(item, 'message_id', 0)}", getattr(item, "chat_id", None))
+
+        current = leads.get(key)
+        if current is None or _sales_priority(item) > _sales_priority(current):
+            leads[key] = item
+
+    return sorted(leads.values(), key=_sales_priority, reverse=True)
+
+
+def _lead_list_header(title: str, page: int, total_pages: int, segment_label: str, total_items: int) -> str:
+    return (
+        f"<b>{title}</b>\n"
+        f"<b>Сегмент:</b> {escape_html(segment_label)}\n"
+        f"<b>Лид:</b> {page + 1}/{total_pages}\n"
+        f"<b>Уникальных лидов:</b> {total_items}"
+    )
+
+
+def _build_lead_page(title: str, items, page: int, total_pages: int, segment_label: str) -> str:
+    signal = items[page]
+    return "\n\n".join([_lead_list_header(title, page, total_pages, segment_label, len(items)), format_sales_lead_card(page + 1, signal)])
+
+
+def sales_lead_keyboard(prefix: str, page: int, total_pages: int, signal, *, extra: str | None = None):
+    rows = []
+    nav = []
+    suffix = f":{extra}" if extra else ""
+    if page > 0:
+        nav.append(InlineKeyboardButton(text="⬅️", callback_data=f"{prefix}:{page - 1}{suffix}"))
+    nav.append(InlineKeyboardButton(text=f"{page + 1}/{total_pages}", callback_data="page_info"))
+    if page < total_pages - 1:
+        nav.append(InlineKeyboardButton(text="➡️", callback_data=f"{prefix}:{page + 1}{suffix}"))
+    if nav:
+        rows.append(nav)
+
+    open_chat = getattr(signal, "chat_url", None)
+    open_contact = _build_contact_link(signal)
+    action_row = []
+    if open_chat:
+        action_row.append(InlineKeyboardButton(text="Открыть чат", url=open_chat))
+    if open_contact and open_contact != open_chat:
+        action_row.append(InlineKeyboardButton(text="Профиль", url=open_contact))
+    if action_row:
+        rows.append(action_row)
+
+    rows.append([InlineKeyboardButton(text="⬅️ В меню", callback_data="tg_signals_menu")])
+    return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
 def _trim_text(value: str | None, limit: int = 220) -> str:
@@ -168,58 +280,25 @@ async def tg_list(callback: CallbackQuery):
     if not items:
         await _send_or_edit(callback, "Пока Telegram-сигналов нет. Сначала запусти поиск по одному из сегментов.", reply_markup=telegram_signals_menu())
         await callback.answer()
-        return
-
-    total_pages = max(1, math.ceil(len(items) / PAGE_SIZE))
-    page = min(page, total_pages - 1)
-    text = _build_signal_page("Telegram-сигналы", items, page, total_pages, _ru_segment(segment_filter or "all"))
-
-    await _send_or_edit(
-        callback,
-        text,
-        reply_markup=pagination_keyboard("tg_list", page, total_pages, extra=(segment_filter or "all")),
-    )
-    await callback.answer()
-
-
-@router.callback_query(F.data.startswith("tg_targets:"))
-async def tg_targets(callback: CallbackQuery):
-    segment_filter, page = _parse_segment_page(callback.data or "")
-    items = get_target_leads(segment=segment_filter, limit=None)
-    if not items:
-        await _send_or_edit(callback, "Пока живых болей нет. Сначала запусти поиск по сегменту.", reply_markup=telegram_signals_menu())
-        await callback.answer()
-        return
-
-    total_pages = max(1, math.ceil(len(items) / PAGE_SIZE))
-    page = min(page, total_pages - 1)
-    text = _build_signal_page("Живые боли", items, page, total_pages, _ru_segment(segment_filter or "all"))
-
-    await _send_or_edit(
-        callback,
-        text,
-        reply_markup=pagination_keyboard("tg_targets", page, total_pages, extra=(segment_filter or "all")),
-    )
-    await callback.answer()
 
 
 @router.callback_query(F.data.startswith("tg_review:"))
 async def tg_review(callback: CallbackQuery):
     segment_filter, page = _parse_segment_page(callback.data or "")
-    items = get_review_leads(segment=segment_filter, limit=None)
+    items = _dedupe_signals_to_leads(get_review_leads(segment=segment_filter, limit=None))
     if not items:
-        await _send_or_edit(callback, "Пока лидов на проверку нет. Сначала запусти поиск по сегменту.", reply_markup=telegram_signals_menu())
+        await _send_or_edit(callback, "Пока лидов для ручной проверки нет. Сначала обнови один из сегментов.", reply_markup=telegram_signals_menu())
         await callback.answer()
         return
 
-    total_pages = max(1, math.ceil(len(items) / PAGE_SIZE))
+    total_pages = len(items)
     page = min(page, total_pages - 1)
-    text = _build_signal_page("Лиды на проверку", items, page, total_pages, _ru_segment(segment_filter or "all"))
+    text = _build_lead_page("🟡 Проверить", items, page, total_pages, _ru_segment(segment_filter or "all"))
 
     await _send_or_edit(
         callback,
         text,
-        reply_markup=pagination_keyboard("tg_review", page, total_pages, extra=(segment_filter or "all")),
+        reply_markup=sales_lead_keyboard("tg_review", page, total_pages, items[page], extra=(segment_filter or "all")),
     )
     await callback.answer()
 
@@ -569,6 +648,21 @@ def format_lead_card(idx: int, lead: dict) -> str:
         f"<b>Заход:</b> {escape_html(_short(lead.get('opener') or '-', 220))}\n\n"
         f"<b>Сигналы</b>\n"
         f"{escape_html(_human_reason(lead.get('icp_reason') or '-'))}"
+    )
+
+
+def format_sales_lead_card(idx: int, signal) -> str:
+    username = _lead_identity(signal)
+    pain_hypothesis = _build_lead_summary(signal)
+    context = _trim_text(getattr(signal, "text_excerpt", None) or getattr(signal, "message_text", None) or "-", 280)
+    opener = _trim_text(getattr(signal, "recommended_opener", None) or "-", 220)
+    return (
+        f"<b>{idx}. {escape_html(username)}</b>\n"
+        f"<b>Чат:</b> {escape_html(getattr(signal, 'chat_title', None) or '-')}\n"
+        f"<b>Сообщение:</b> {escape_html(context)}\n"
+        f"<b>Контекст:</b> {escape_html(_trim_text(getattr(signal, 'why_actionable', None) or getattr(signal, 'conversation_type', None) or '-', 160))}\n"
+        f"<b>Гипотеза боли:</b> {escape_html(pain_hypothesis)}\n"
+        f"<b>Opener:</b> {escape_html(opener)}"
     )
 
 

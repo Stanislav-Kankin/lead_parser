@@ -1,6 +1,6 @@
 from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
 
-PAGE_SIZE = 3
+PAGE_SIZE = 1
 
 
 def main_menu() -> InlineKeyboardMarkup:
@@ -16,18 +16,29 @@ def main_menu() -> InlineKeyboardMarkup:
 def telegram_signals_menu() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(
         inline_keyboard=[
-            [InlineKeyboardButton(text="🛒 WB / Ozon боль", callback_data="tg_collect:ecom_marketplace_pain")],
-            [InlineKeyboardButton(text="🌐 Свой сайт / Direct", callback_data="tg_collect:ecom_direct_growth")],
-            [InlineKeyboardButton(text="🏭 Производители", callback_data="tg_collect:manufacturer_secondary")],
-            [InlineKeyboardButton(text="🔥 Последние сигналы", callback_data="tg_list:0:all")],
-            [InlineKeyboardButton(text="🎯 Целевые лиды", callback_data="tg_targets:0:all")],
-            [InlineKeyboardButton(text="🟡 На проверку", callback_data="tg_review:0:all")],
+            [InlineKeyboardButton(text="Обновить WB / Ozon", callback_data="tg_collect:ecom_marketplace_pain")],
+            [InlineKeyboardButton(text="Обновить сайт / direct", callback_data="tg_collect:ecom_direct_growth")],
+            [InlineKeyboardButton(text="Обновить производители", callback_data="tg_collect:manufacturer_secondary")],
+            [InlineKeyboardButton(text="🎯 Лиды: писать сейчас", callback_data="tg_targets:0:all")],
+            [InlineKeyboardButton(text="🟡 Лиды: проверить", callback_data="tg_review:0:all")],
+            [InlineKeyboardButton(text="📤 Excel: target + review", callback_data="tg_export:actionable")],
+            [InlineKeyboardButton(text="⚙️ Debug / сырьё", callback_data="tg_debug_menu")],
+        ]
+    )
+
+
+def telegram_signals_debug_menu() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [InlineKeyboardButton(text="🔥 Все сигналы", callback_data="tg_list:0:all")],
             [InlineKeyboardButton(text="💬 Обсуждения с болью", callback_data="tg_discussions:0:all")],
             [InlineKeyboardButton(text="🏢 Похожи на бизнес", callback_data="tg_business:0:all")],
+            [InlineKeyboardButton(text="📡 Рынок / гипотезы", callback_data="tg_market:0:all")],
             [
                 InlineKeyboardButton(text="📤 Excel лиды", callback_data="tg_export:actionable"),
                 InlineKeyboardButton(text="📤 Excel рынок", callback_data="tg_export:market"),
             ],
+            [InlineKeyboardButton(text="⬅️ Назад", callback_data="tg_signals_menu")],
         ]
     )
 
