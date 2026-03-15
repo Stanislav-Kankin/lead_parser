@@ -4,6 +4,7 @@ from typing import Any
 from telethon.tl.types import Message
 
 from telegram_signals.client import get_client, search_public_chats
+from telegram_signals.conversation.thread_builder import build_thread_views
 from telegram_signals.keywords import CHAT_BAD_HINTS, CHAT_DISCOVERY_KEYWORDS, CHAT_GOOD_HINTS
 from telegram_signals.signal_classifier import classify_signal
 from telegram_signals.repository import save_signals
@@ -51,25 +52,36 @@ def _excerpt(text: str, limit: int = 320) -> str:
 
 async def _collect_messages_from_chat(client, chat, limit_per_chat: int) -> list[Message]:
     messages: list[Message] = []
+    message_ids: set[int] = set()
+
     async for msg in client.iter_messages(chat, limit=limit_per_chat):
         if not msg or not getattr(msg, "message", None):
             continue
+        message_id = getattr(msg, "id", None)
+        if message_id:
+            message_ids.add(int(message_id))
         messages.append(msg)
-    messages.reverse()
+
+    missing_parent_ids = sorted(
+        {
+            int(getattr(msg, "reply_to_msg_id", 0) or 0)
+            for msg in messages
+            if getattr(msg, "reply_to_msg_id", None) and int(getattr(msg, "reply_to_msg_id", 0) or 0) not in message_ids
+        }
+    )
+    if missing_parent_ids:
+        fetched_parents = await client.get_messages(chat, ids=missing_parent_ids)
+        for parent in fetched_parents or []:
+            if not parent or not getattr(parent, "message", None):
+                continue
+            parent_id = getattr(parent, "id", None)
+            if not parent_id or int(parent_id) in message_ids:
+                continue
+            messages.append(parent)
+            message_ids.add(int(parent_id))
+
+    messages.sort(key=lambda item: (getattr(item, "date", None) or 0, getattr(item, "id", 0) or 0))
     return messages
-
-
-def _context_window(messages: list[Message], idx: int, radius: int = 2) -> str:
-    left = max(0, idx - radius)
-    right = min(len(messages), idx + radius + 1)
-    parts: list[str] = []
-    for i in range(left, right):
-        if i == idx:
-            continue
-        message_text = getattr(messages[i], "message", None)
-        if message_text:
-            parts.append(str(message_text))
-    return "\n".join(parts)
 
 
 async def collect_signals(
@@ -78,6 +90,8 @@ async def collect_signals(
     limit_messages_per_chat: int = 80,
     context_radius: int = 2,
 ) -> dict:
+    del context_radius  # v7: контекст теперь берём из reply chain, а не из радиуса соседних сообщений
+
     if segment not in CHAT_DISCOVERY_KEYWORDS:
         raise ValueError(f"Неизвестный сегмент: {segment}")
 
@@ -122,26 +136,30 @@ async def collect_signals(
             messages = await _collect_messages_from_chat(client, chat, limit_messages_per_chat)
             scanned_messages += len(messages)
 
-            for msg_idx, msg in enumerate(messages):
+            thread_views = build_thread_views(messages)
+            for view in thread_views:
+                msg = view.message
                 text = (getattr(msg, "message", None) or "").strip()
                 if not text:
                     continue
 
-                context_text = _context_window(messages, msg_idx, radius=context_radius)
                 author_username = _author_username(msg)
-
                 classification = classify_signal(
                     text,
                     segment,
-                    context_text=context_text,
+                    context_text=view.context_text,
+                    conversation_text=view.conversation_text,
                     author_username=author_username,
                     chat_title=_chat_title(chat),
                     chat_username=getattr(chat, "username", None),
+                    reply_depth=view.reply_depth,
                 )
 
                 if classification["message_type"] in {"noise", "vacancy"}:
                     continue
-                if classification["final_lead_score"] < 6:
+                if classification["final_lead_score"] < 7:
+                    continue
+                if classification["lead_fit"] == "contractor":
                     continue
 
                 item = {
@@ -158,13 +176,12 @@ async def collect_signals(
                     "author_username": author_username,
                     "message_text": text,
                     "text_excerpt": _excerpt(text),
-                    "signal_score": classification["signal_score"],
-                    "signal_level": classification["signal_level"],
-                    "recommended_opener": classification["recommended_opener"],
                     "source_type": "chat_message",
-                    "is_comment": False,
-                    "parent_message_id": getattr(msg, "reply_to_msg_id", None),
-                    "root_message_id": getattr(msg, "reply_to_msg_id", None) or getattr(msg, "id", 0),
+                    "is_comment": bool(view.parent_message_id),
+                    "parent_message_id": view.parent_message_id,
+                    "root_message_id": view.root_message_id,
+                    "reply_depth": view.reply_depth,
+                    "conversation_key": view.conversation_key,
                     **classification,
                 }
                 collected_items.append(item)

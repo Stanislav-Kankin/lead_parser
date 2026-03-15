@@ -9,10 +9,10 @@ from openpyxl.utils import get_column_letter
 
 from telegram_signals.repository import (
     get_discussion_leads,
+    get_market_intelligence,
     get_review_leads,
     get_signals,
     get_target_leads,
-    get_market_intelligence,
 )
 
 
@@ -50,7 +50,7 @@ def export_signals_to_xlsx(kind: str = "actionable") -> Path:
         title = "target_leads"
     else:
         items = get_signals(limit=None, lead_fit_in=["target", "review"])
-        suffix = "sales"
+        suffix = "sales_leads"
         title = "sales_leads"
 
     wb = Workbook()
@@ -62,10 +62,14 @@ def export_signals_to_xlsx(kind: str = "actionable") -> Path:
         "segment",
         "lead_fit",
         "next_step",
+        "final_lead_score",
+        "conversation_score",
+        "reply_depth",
         "author_type_guess",
         "conversation_type",
         "message_type",
-        "final_lead_score",
+        "pain_detected",
+        "icp_detected",
         "why_actionable",
         "company_hint",
         "website_hint",
@@ -75,6 +79,7 @@ def export_signals_to_xlsx(kind: str = "actionable") -> Path:
         "short_message",
         "recommended_opener",
         "chat_url",
+        "conversation_key",
     ]
     ws.append(headers)
     for cell in ws[1]:
@@ -86,10 +91,14 @@ def export_signals_to_xlsx(kind: str = "actionable") -> Path:
             item.segment or "",
             item.lead_fit or "",
             item.next_step or "",
+            item.final_lead_score or 0,
+            item.conversation_score or 0,
+            item.reply_depth or 0,
             item.author_type_guess or "",
             item.conversation_type or "",
             item.message_type or "",
-            item.final_lead_score or 0,
+            item.pain_detected or "",
+            item.icp_detected or "",
             item.why_actionable or "",
             item.company_hint or "",
             item.website_hint or "",
@@ -99,6 +108,7 @@ def export_signals_to_xlsx(kind: str = "actionable") -> Path:
             (item.text_excerpt or "")[:240],
             item.recommended_opener or "",
             item.chat_url or "",
+            item.conversation_key or "",
         ])
 
     _autosize(ws)

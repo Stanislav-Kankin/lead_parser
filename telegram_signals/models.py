@@ -39,6 +39,12 @@ class TelegramSignal(Base):
     parent_message_id = Column(Integer, nullable=True)
     root_message_id = Column(Integer, nullable=True)
 
+    reply_depth = Column(Integer, nullable=False, default=0)
+    conversation_key = Column(String, nullable=True)
+    conversation_score = Column(Integer, nullable=False, default=0)
+    pain_detected = Column(Text, nullable=True)
+    icp_detected = Column(Text, nullable=True)
+
     message_type = Column(String, nullable=True)
     conversation_type = Column(String, nullable=True)
     author_type_guess = Column(String, nullable=True)

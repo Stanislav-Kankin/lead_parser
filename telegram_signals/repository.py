@@ -65,8 +65,10 @@ def get_signals(
         )
         stmt = stmt.order_by(
             desc(TelegramSignal.final_lead_score),
+            desc(TelegramSignal.conversation_score),
             desc(level_order),
             desc(TelegramSignal.signal_score),
+            desc(TelegramSignal.reply_depth),
             desc(TelegramSignal.message_date),
             desc(TelegramSignal.created_at),
         )
@@ -93,12 +95,14 @@ def get_discussion_leads(segment: str | None = None, limit: int | None = None) -
             TelegramSignal.author_type_guess != "contractor",
             or_(
                 TelegramSignal.context_score >= 2,
+                TelegramSignal.conversation_score >= 2,
                 TelegramSignal.conversation_type.in_(["discussion", "complaint", "help_request", "question"]),
                 TelegramSignal.pain_score >= 3,
                 TelegramSignal.intent_score >= 4,
             ),
         )
         stmt = stmt.order_by(
+            desc(TelegramSignal.conversation_score),
             desc(TelegramSignal.context_score),
             desc(TelegramSignal.final_lead_score),
             desc(TelegramSignal.message_date),
@@ -118,9 +122,7 @@ def get_market_intelligence(segment: str | None = None, limit: int | None = None
         stmt = select(TelegramSignal)
         if segment:
             stmt = stmt.where(TelegramSignal.segment == segment)
-        stmt = stmt.where(
-            TelegramSignal.message_type.in_(["expert_content", "market_intelligence"]),
-        )
+        stmt = stmt.where(TelegramSignal.message_type.in_(["expert_content", "market_intelligence"]))
         stmt = stmt.order_by(
             desc(TelegramSignal.final_lead_score),
             desc(TelegramSignal.message_date),

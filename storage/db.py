@@ -19,6 +19,11 @@ TELEGRAM_SIGNAL_REQUIRED_COLUMNS = {
     "is_comment": "ALTER TABLE telegram_signals ADD COLUMN is_comment BOOLEAN DEFAULT 0",
     "parent_message_id": "ALTER TABLE telegram_signals ADD COLUMN parent_message_id INTEGER",
     "root_message_id": "ALTER TABLE telegram_signals ADD COLUMN root_message_id INTEGER",
+    "reply_depth": "ALTER TABLE telegram_signals ADD COLUMN reply_depth INTEGER DEFAULT 0",
+    "conversation_key": "ALTER TABLE telegram_signals ADD COLUMN conversation_key VARCHAR",
+    "conversation_score": "ALTER TABLE telegram_signals ADD COLUMN conversation_score INTEGER DEFAULT 0",
+    "pain_detected": "ALTER TABLE telegram_signals ADD COLUMN pain_detected TEXT",
+    "icp_detected": "ALTER TABLE telegram_signals ADD COLUMN icp_detected TEXT",
     "message_type": "ALTER TABLE telegram_signals ADD COLUMN message_type VARCHAR",
     "conversation_type": "ALTER TABLE telegram_signals ADD COLUMN conversation_type VARCHAR",
     "author_type_guess": "ALTER TABLE telegram_signals ADD COLUMN author_type_guess VARCHAR",
@@ -112,6 +117,8 @@ def _ensure_telegram_signal_columns():
         conn.execute(text("UPDATE telegram_signals SET promo_penalty = COALESCE(promo_penalty, 0)"))
         conn.execute(text("UPDATE telegram_signals SET contractor_penalty = COALESCE(contractor_penalty, 0)"))
         conn.execute(text("UPDATE telegram_signals SET contactability_score = COALESCE(contactability_score, 0)"))
+        conn.execute(text("UPDATE telegram_signals SET reply_depth = COALESCE(reply_depth, 0)"))
+        conn.execute(text("UPDATE telegram_signals SET conversation_score = COALESCE(conversation_score, 0)"))
 
 
 def init_db():
