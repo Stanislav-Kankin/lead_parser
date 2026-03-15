@@ -265,24 +265,34 @@ def _build_lead_fit(
     first_person_pain_score: int,
     contactability_score: int,
     conversation_score: int,
+    pain_score: int = 0,
+    icp_score: int = 0,
+    intent_score: int = 0,
 ) -> tuple[str, str]:
     if message_type in {"service_ad", "vacancy", "supplier_ad"} or author_type_guess == "contractor":
         return "contractor", "ignore"
 
     if message_type == "self_pain":
-        if contactability_score >= 1 and signal_score >= 12 and conversation_score >= 2:
+        if (
+            contactability_score >= 1
+            and signal_score >= 14
+            and (pain_score >= 6 or first_person_pain_score >= 4)
+            and (icp_score >= 2 or intent_score >= 4)
+        ):
             return "target", "outreach_now"
-        return "review", "research_company"
+        if signal_score >= 9:
+            return "review", "research_company"
+        return "noise", "ignore"
 
     if message_type == "peer_question":
-        if signal_score >= 9:
+        if signal_score >= 10 and (icp_score >= 2 or intent_score >= 4 or conversation_score >= 2):
             return "review", "research_company"
         return "noise", "ignore"
 
     if message_type in {"expert_content", "market_intelligence"}:
         return "noise", "ignore"
 
-    if first_person_pain_score >= 4 and signal_score >= 9:
+    if first_person_pain_score >= 4 and signal_score >= 10 and (pain_score >= 3 or intent_score >= 4):
         return "review", "research_company"
 
     return "noise", "ignore"
