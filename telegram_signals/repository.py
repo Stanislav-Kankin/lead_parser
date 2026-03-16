@@ -72,6 +72,8 @@ def get_signals(
             else_=1,
         )
         stmt = stmt.order_by(
+            desc(TelegramSignal.is_person_reachable),
+            desc(TelegramSignal.contact_entity_score),
             desc(TelegramSignal.final_lead_score),
             desc(TelegramSignal.conversation_score),
             desc(TelegramSignal.reply_depth),

@@ -36,6 +36,9 @@ TELEGRAM_SIGNAL_REQUIRED_COLUMNS = {
     "contractor_penalty": "ALTER TABLE telegram_signals ADD COLUMN contractor_penalty INTEGER DEFAULT 0",
     "final_lead_score": "ALTER TABLE telegram_signals ADD COLUMN final_lead_score INTEGER DEFAULT 0",
     "contactability_score": "ALTER TABLE telegram_signals ADD COLUMN contactability_score INTEGER DEFAULT 0",
+    "contact_entity_type": "ALTER TABLE telegram_signals ADD COLUMN contact_entity_type VARCHAR",
+    "contact_entity_score": "ALTER TABLE telegram_signals ADD COLUMN contact_entity_score INTEGER DEFAULT 0",
+    "is_person_reachable": "ALTER TABLE telegram_signals ADD COLUMN is_person_reachable BOOLEAN DEFAULT 0",
     "why_actionable": "ALTER TABLE telegram_signals ADD COLUMN why_actionable TEXT",
     "company_hint": "ALTER TABLE telegram_signals ADD COLUMN company_hint VARCHAR",
     "website_hint": "ALTER TABLE telegram_signals ADD COLUMN website_hint VARCHAR",
@@ -120,6 +123,8 @@ def _ensure_telegram_signal_columns():
         conn.execute(text("UPDATE telegram_signals SET promo_penalty = COALESCE(promo_penalty, 0)"))
         conn.execute(text("UPDATE telegram_signals SET contractor_penalty = COALESCE(contractor_penalty, 0)"))
         conn.execute(text("UPDATE telegram_signals SET contactability_score = COALESCE(contactability_score, 0)"))
+        conn.execute(text("UPDATE telegram_signals SET contact_entity_score = COALESCE(contact_entity_score, 0)"))
+        conn.execute(text("UPDATE telegram_signals SET is_person_reachable = COALESCE(is_person_reachable, 0)"))
         conn.execute(text("UPDATE telegram_signals SET reply_depth = COALESCE(reply_depth, 0)"))
         conn.execute(text("UPDATE telegram_signals SET conversation_score = COALESCE(conversation_score, 0)"))
 

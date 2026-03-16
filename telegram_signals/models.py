@@ -58,6 +58,9 @@ class TelegramSignal(Base):
     contractor_penalty = Column(Integer, nullable=False, default=0)
     final_lead_score = Column(Integer, nullable=False, default=0)
     contactability_score = Column(Integer, nullable=False, default=0)
+    contact_entity_type = Column(String, nullable=True)
+    contact_entity_score = Column(Integer, nullable=False, default=0)
+    is_person_reachable = Column(Boolean, nullable=False, default=False)
 
     lead_fit = Column(String, nullable=True, default="noise")
     next_step = Column(String, nullable=True)

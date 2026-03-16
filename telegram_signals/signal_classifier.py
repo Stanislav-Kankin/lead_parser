@@ -274,6 +274,104 @@ WEAK_REVIEW_PATTERNS = [
 ]
 
 
+PERSON_NAME_RE = re.compile(r"[a-zа-яё]{3,}[\._-][a-zа-яё]{3,}", flags=re.I)
+CHANNEL_HANDLE_HINTS = (
+    "wb",
+    "ozon",
+    "market",
+    "seller",
+    "ecom",
+    "business",
+    "biz",
+    "brand",
+    "agency",
+    "media",
+    "news",
+    "store",
+    "shop",
+    "marketplace",
+    "export",
+    "ppt",
+    "design",
+    "promo",
+)
+PERSON_AUTHOR_HINTS = (
+    "эксперт",
+    "агентство",
+    "команда",
+    "редакция",
+    "канал",
+    "медиа",
+    "студия",
+)
+
+
+def _clean_handle(value: str | None) -> str:
+    return (value or "").strip().lstrip("@").lower()
+
+
+def _looks_like_person_name(value: str | None) -> bool:
+    text = (value or "").strip()
+    if not text:
+        return False
+    if any(token in text.lower() for token in PERSON_AUTHOR_HINTS):
+        return False
+    parts = [part for part in re.split(r"\s+", text) if part]
+    if len(parts) >= 2 and all(re.search(r"[A-Za-zА-Яа-яЁё]{2,}", part) for part in parts[:2]):
+        return True
+    return False
+
+
+def _looks_like_channel_handle(handle: str) -> bool:
+    if not handle:
+        return False
+    if handle.endswith("bot"):
+        return False
+    if any(token in handle for token in CHANNEL_HANDLE_HINTS):
+        return True
+    if handle.count("_") >= 2:
+        return True
+    return False
+
+
+def _classify_contact_entity(
+    *,
+    author_username: str | None,
+    chat_username: str | None,
+    author_name: str | None,
+    chat_title: str | None,
+    reply_depth: int,
+    message_type: str,
+) -> tuple[str, int, int]:
+    author_handle = _clean_handle(author_username)
+    chat_handle = _clean_handle(chat_username)
+    title_l = (chat_title or "").lower()
+    person_name = _looks_like_person_name(author_name)
+    handle_person_like = bool(author_handle and PERSON_NAME_RE.search(author_handle))
+
+    if author_handle.endswith("bot") or chat_handle.endswith("bot"):
+        return "bot", -25, 0
+
+    if author_handle and chat_handle and author_handle == chat_handle:
+        return "channel", -16, 0
+
+    if author_handle:
+        if _looks_like_channel_handle(author_handle) and not person_name and not handle_person_like:
+            return "channel", -14, 0
+        if person_name or handle_person_like:
+            return "person", 8 if reply_depth >= 1 else 5, 1
+        if reply_depth >= 1 and message_type in {"participant_pain", "self_pain", "peer_question"}:
+            return "person", 7, 1
+        return "unknown", 2, 0
+
+    if chat_handle:
+        if "чат" in title_l or "форум" in title_l or reply_depth >= 1:
+            return "unknown", -3, 0
+        return "channel", -10, 0
+
+    return "unknown", 0, 0
+
+
 def _contains_any(text_l: str, keywords: list[str]) -> list[str]:
     return [kw for kw in keywords if kw in text_l]
 
@@ -399,6 +497,8 @@ def _build_lead_fit(
     signal_score: int,
     first_person_pain_score: int,
     contactability_score: int,
+    contact_entity_type: str,
+    is_person_reachable: int,
     conversation_score: int,
     pain_score: int,
     icp_score: int,
@@ -411,6 +511,9 @@ def _build_lead_fit(
     if message_type in {"service_ad", "vacancy", "supplier_ad"} or author_type_guess == "contractor":
         return "contractor", "ignore"
 
+    if contact_entity_type == "bot":
+        return "noise", "ignore"
+
     if message_type in {"expert_content", "market_intelligence", "noise"} and editorial_penalty >= 4:
         return "noise", "ignore"
 
@@ -420,6 +523,8 @@ def _build_lead_fit(
         and (live_help_score >= 4 or operational_score >= 3 or intent_score >= 4)
         and (icp_score >= 4 or participant_score >= 4)
         and contactability_score >= 1
+        and is_person_reachable == 1
+        and contact_entity_type not in {"channel", "bot"}
         and editorial_penalty < 4
     )
     participant_target = (
@@ -427,6 +532,8 @@ def _build_lead_fit(
         and first_person_pain_score >= 6
         and pain_score >= 8
         and (conversation_score >= 3 or live_help_score >= 4 or operational_score >= 3)
+        and is_person_reachable == 1
+        and contact_entity_type not in {"channel", "bot"}
         and editorial_penalty < 4
     )
 
@@ -434,11 +541,17 @@ def _build_lead_fit(
         return "target", "outreach_now"
 
     if message_type in {"self_pain", "participant_pain"}:
+        if contact_entity_type == "channel":
+            if pain_score >= 8 and (live_help_score >= 4 or operational_score >= 3) and editorial_penalty < 4:
+                return "review", "research_company"
+            return "noise", "ignore"
         if (pain_score >= 6 and (live_help_score >= 2 or operational_score >= 2 or intent_score >= 2)) or (intent_score >= 4 and icp_score >= 2) or (live_help_score >= 3 and icp_score >= 4):
             return "review", "research_company"
         return "noise", "ignore"
 
     if message_type == "peer_question":
+        if contact_entity_type == "channel":
+            return "noise", "ignore"
         if live_help_score >= 2 and icp_score >= 2 and editorial_penalty < 4:
             return "review", "research_company"
         return "noise", "ignore"
@@ -456,6 +569,7 @@ def classify_signal(
     context_text: str = "",
     conversation_text: str = "",
     author_username: str | None = None,
+    author_name: str | None = None,
     chat_title: str | None = None,
     chat_username: str | None = None,
     reply_depth: int = 0,
@@ -585,13 +699,24 @@ def classify_signal(
     pain_detected = sorted({kw for kw in pain_hits + first_person_hits + marketing_pain_hits + live_help_hits + operational_hits})
     icp_detected = sorted({kw for kw in direct_hits + brand_hits + business_scope_hits + owner_role_hits})
 
+    contact_entity_type, contact_entity_score, is_person_reachable = _classify_contact_entity(
+        author_username=author_username,
+        chat_username=chat_username,
+        author_name=author_name,
+        chat_title=chat_title,
+        reply_depth=reply_depth,
+        message_type=message_type,
+    )
+
     contactability_score = 0
     contact_hint = None
-    if author_username:
-        contactability_score += 3
+    if is_person_reachable and author_username:
+        contactability_score += 4
+        contact_hint = f"@{author_username}"
+    elif author_username:
+        contactability_score += 1
         contact_hint = f"@{author_username}"
     elif chat_username:
-        contactability_score += 1
         contact_hint = f"https://t.me/{chat_username}"
 
     website_hint = _extract_website_hint(text)
@@ -618,6 +743,7 @@ def classify_signal(
         + conversation_score
         + owner_likelihood_score
         + contactability_score
+        + contact_entity_score
         + participant_score
         + segment_bonus
         - promo_penalty
@@ -639,6 +765,8 @@ def classify_signal(
         signal_score=signal_score,
         first_person_pain_score=first_person_pain_score,
         contactability_score=contactability_score,
+        contact_entity_type=contact_entity_type,
+        is_person_reachable=is_person_reachable,
         conversation_score=conversation_score,
         pain_score=pain_score,
         icp_score=icp_score,
@@ -671,8 +799,12 @@ def classify_signal(
         reasons.append("текст больше похож на бизнес, чем на подрядчика")
     if conversation_score >= 2:
         reasons.append("сигнал подтверждается цепочкой обсуждения")
-    if contactability_score >= 3:
-        reasons.append("есть прямой контакт автора")
+    if is_person_reachable and contactability_score >= 4:
+        reasons.append("есть прямой контакт живого автора")
+    elif contact_entity_type == "channel":
+        reasons.append("контакт ведет скорее на канал, а не на человека")
+    elif contact_entity_type == "bot":
+        reasons.append("контакт ведет на бота, а не на человека")
     elif contactability_score >= 1:
         reasons.append("есть хотя бы косвенный канал контакта")
 
@@ -695,6 +827,9 @@ def classify_signal(
         "contractor_penalty": contractor_penalty,
         "final_lead_score": signal_score,
         "contactability_score": contactability_score,
+        "contact_entity_type": contact_entity_type,
+        "contact_entity_score": contact_entity_score,
+        "is_person_reachable": is_person_reachable,
         "lead_fit": lead_fit,
         "next_step": next_step,
         "is_actionable": 1 if is_actionable else 0,
