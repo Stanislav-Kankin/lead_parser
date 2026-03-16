@@ -187,7 +187,10 @@ async def _render_sales_view(callback: CallbackQuery, view: str, page: int, segm
 def sales_lead_keyboard(prefix: str, page: int, total_pages: int, signal, *, extra: str | None = None):
     rows = []
     nav = []
-    suffix = f":{extra}" if extra else ""
+    segment = extra or "all"
+    suffix = f":{segment}"
+    signal_id = getattr(signal, "id", None)
+
     if page > 0:
         nav.append(InlineKeyboardButton(text="⬅️", callback_data=f"{prefix}:{page - 1}{suffix}"))
     nav.append(InlineKeyboardButton(text=f"{page + 1}/{total_pages}", callback_data="page_info"))
@@ -195,6 +198,22 @@ def sales_lead_keyboard(prefix: str, page: int, total_pages: int, signal, *, ext
         nav.append(InlineKeyboardButton(text="➡️", callback_data=f"{prefix}:{page + 1}{suffix}"))
     if nav:
         rows.append(nav)
+
+    rows.append([
+        InlineKeyboardButton(text="🔢 Перейти", callback_data=f"jump:{prefix}:{segment}"),
+    ])
+
+    if signal_id is not None and prefix in {"tg_targets", "tg_review", "tg_ok", "tg_not_ok"}:
+        rows.append([
+            InlineKeyboardButton(
+                text="✅ ОК лид",
+                callback_data=f"mark:ok:{signal_id}:{prefix}:{page}:{segment}",
+            ),
+            InlineKeyboardButton(
+                text="❌ не ОК лид",
+                callback_data=f"mark:not_ok:{signal_id}:{prefix}:{page}:{segment}",
+            ),
+        ])
 
     open_chat = getattr(signal, "chat_url", None)
     open_contact = _build_contact_link(signal)
@@ -385,7 +404,7 @@ async def jump_to_page_prompt(callback: CallbackQuery):
     _, view, segment = parts
     PAGE_JUMP_STATE[callback.from_user.id] = {"view": view, "segment": None if segment == "all" else segment}
     await callback.answer()
-    await callback.message.answer("Введи номер страницы сообщением. Например: 15")
+    await callback.message.answer("Введи номер страницы сообщением. Например: 15. Для отмены: отмена")
 
 
 @router.callback_query(F.data.startswith("mark:"))
@@ -589,19 +608,25 @@ async def search_page(callback: CallbackQuery):
 
 @router.message()
 async def handle_page_jump(message: Message):
-    state = PAGE_JUMP_STATE.get(message.from_user.id if message.from_user else 0)
+    user_id = message.from_user.id if message.from_user else 0
+    state = PAGE_JUMP_STATE.get(user_id)
     if not state:
         return
 
     text_value = (message.text or "").strip()
+    if text_value.lower() in {"отмена", "cancel", "/cancel"}:
+        PAGE_JUMP_STATE.pop(user_id, None)
+        await message.answer("Переход по странице отменён.")
+        return
+
     if not text_value.isdigit():
-        await message.answer("Нужен номер страницы цифрами. Например: 12")
+        await message.answer("Нужен номер страницы цифрами. Например: 12. Для отмены: отмена")
         return
 
     page = max(0, int(text_value) - 1)
     callback_stub = type("CallbackStub", (), {"message": message})()
     await _render_sales_view(callback_stub, state["view"], page, state.get("segment"))
-    PAGE_JUMP_STATE.pop(message.from_user.id, None)
+    PAGE_JUMP_STATE.pop(user_id, None)
 
 
 @router.message()

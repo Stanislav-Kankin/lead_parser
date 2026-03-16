@@ -54,6 +54,27 @@ EXPERT_CONTENT_PATTERNS = [
     "новость",
 ]
 
+EDITORIAL_PATTERNS = [
+    "мы подготовили",
+    "делимся",
+    "рассказываем",
+    "смотрите",
+    "в статье",
+    "в материале",
+    "новость",
+    "новости",
+    "подборка",
+    "гайд",
+    "разбор",
+    "читайте",
+    "вышел материал",
+    "вышла статья",
+    "в нашем канале",
+    "подписывайтесь",
+    "ставьте реакции",
+    "собрали для вас",
+]
+
 MARKET_OBSERVATION_PATTERNS = [
     "рынок",
     "повышает комиссии",
@@ -83,6 +104,19 @@ CHANNEL_AUTHOR_PATTERNS = [
     "в следующем посте",
     "поставьте реакцию",
     "подписка",
+]
+
+OFFICIAL_MARKETPLACE_PATTERNS = [
+    "официальный канал",
+    "новости wildberries",
+    "новости ozon",
+    "скидки",
+    "распродажа",
+    "промокод",
+    "товары дня",
+    "акция",
+    "доставка",
+    "покупатели",
 ]
 
 CONTRACTOR_STRONG_PATTERNS = [
@@ -158,6 +192,11 @@ MARKETING_PAIN_PATTERNS = [
     "хотим direct",
     "как лить трафик",
     "нужен трафик",
+    "реклама идет",
+    "продажи остановились",
+    "продаж нет",
+    "позиции есть",
+    "трафик есть",
 ]
 
 QUESTION_PATTERNS = ["кто", "как", "зачем", "почему", "посоветуйте", "подскажите"]
@@ -183,6 +222,44 @@ CHANGE_EVENT_PATTERNS = [
     "хотим меньше зависеть от ozon",
 ]
 
+LIVE_HELP_PATTERNS = [
+    "кто-нибудь может помочь",
+    "кто-нибудь может подсказать",
+    "подскажите",
+    "помогите разобраться",
+    "кто сталкивался",
+    "в чем может быть причина",
+    "в чём может быть причина",
+    "что делаем не так",
+    "не понимаем",
+    "есть ли смысл",
+    "как выйти",
+    "как масштабировать",
+    "как снизить",
+    "как запустить",
+    "кто посоветует",
+    "посоветуйте",
+]
+
+OPERATIONAL_PAIN_PATTERNS = [
+    "у нас продажи",
+    "у нас товар",
+    "у нас склад",
+    "реклама идет",
+    "реклама идёт",
+    "продажи остановились",
+    "позиции есть",
+    "карточка в топе",
+    "трафик есть",
+    "продаж нет",
+    "на складе",
+    "маржа",
+    "комиссия",
+    "окупаемость",
+    "сайт",
+    "direct",
+]
+
 WEAK_REVIEW_PATTERNS = [
     "экосистема чатов",
     "ищете поставщика",
@@ -197,10 +274,8 @@ WEAK_REVIEW_PATTERNS = [
 ]
 
 
-
 def _contains_any(text_l: str, keywords: list[str]) -> list[str]:
     return [kw for kw in keywords if kw in text_l]
-
 
 
 def _extract_company_hint(text: str) -> str | None:
@@ -218,66 +293,61 @@ def _extract_company_hint(text: str) -> str | None:
     return None
 
 
-
-def _extract_website_hint(text_l: str) -> str | None:
-    match = re.search(r"(https?://\S+|www\.\S+|[a-z0-9-]+\.(ru|com|shop|store|online))", text_l, flags=re.I)
+def _extract_website_hint(text: str) -> str | None:
+    match = re.search(r"(?:https?://)?(?:www\.)?([a-z0-9][a-z0-9\-]{1,62}\.[a-z]{2,})(?:/[^\s]*)?", text, flags=re.I)
     if not match:
         return None
-    return match.group(1)[:120]
+    return match.group(1).lower()
 
 
+def _guess_author_type(full_l: str) -> tuple[str, int, int]:
+    owner_score = 0
+    contractor_penalty = 0
 
-def _guess_author_type(text_l: str) -> tuple[str, int, int]:
-    contractor_hits = _contains_any(text_l, CONTRACTOR_HINT_KEYWORDS) + _contains_any(text_l, CONTRACTOR_STRONG_PATTERNS)
-    business_hits = (
-        _contains_any(text_l, BUSINESS_HINT_KEYWORDS)
-        + _contains_any(text_l, OWNER_CONTEXT_PATTERNS)
-        + _contains_any(text_l, OWNER_ROLE_PATTERNS)
-    )
+    owner_hits = [p for p in OWNER_CONTEXT_PATTERNS if p in full_l]
+    role_hits = [p for p in OWNER_ROLE_PATTERNS if p in full_l]
+    business_hits = [p for p in BUSINESS_HINT_KEYWORDS if p in full_l]
+    contractor_hits = [p for p in CONTRACTOR_HINT_KEYWORDS if p in full_l]
+    contractor_strong_hits = [p for p in CONTRACTOR_STRONG_PATTERNS if p in full_l]
 
-    owner_likelihood_score = len(business_hits) * 2
-    contractor_penalty = len(contractor_hits) * 3
+    owner_score += len(owner_hits) * 3
+    owner_score += len(role_hits) * 2
+    owner_score += len(business_hits)
 
-    if any(pattern in text_l for pattern in CONTRACTOR_STRONG_PATTERNS):
-        contractor_penalty += 4
+    contractor_penalty += len(contractor_hits) * 2
+    contractor_penalty += len(contractor_strong_hits) * 4
 
-    if any(pattern in text_l for pattern in OWNER_CONTEXT_PATTERNS + OWNER_ROLE_PATTERNS):
-        owner_likelihood_score += 3
-
-    if contractor_penalty >= owner_likelihood_score + 2:
-        return "contractor", owner_likelihood_score, contractor_penalty
-    if owner_likelihood_score >= contractor_penalty + 1:
-        return "business", owner_likelihood_score, contractor_penalty
-    return "unknown", owner_likelihood_score, contractor_penalty
-
+    if contractor_penalty >= owner_score + 3:
+        return "contractor", max(owner_score, 0), contractor_penalty
+    if owner_score >= 3:
+        return "business", owner_score, contractor_penalty
+    return "unknown", owner_score, contractor_penalty
 
 
-def _guess_conversation_type(text_l: str, has_intent: bool, has_pain: bool, author_type: str) -> str:
-    if has_intent:
+def _guess_conversation_type(full_l: str, has_intent: bool, has_pain: bool, author_type_guess: str) -> str:
+    if has_pain and has_intent:
         return "help_request"
     if has_pain:
         return "complaint"
-    if "?" in text_l or any(x in text_l for x in QUESTION_PATTERNS):
+    if has_intent:
         return "question"
-    if author_type == "contractor":
-        return "promo_post"
-    return "discussion"
+    if author_type_guess == "business":
+        return "discussion"
+    return "broadcast"
 
 
-
-def _detect_primary_pain_tag(full_l: str) -> str | None:
-    if any(x in full_l for x in ["не окупается", "не сходится", "дорогой трафик", "сливаем бюджет", "cac"]):
+def _detect_primary_pain_tag(text_l: str) -> str | None:
+    if any(x in text_l for x in ["не окупается", "сливаем бюджет", "дорогой трафик", "дорогая реклама"]):
         return "ads_not_profitable"
-    if any(x in full_l for x in ["wb", "ozon", "маркетплейс", "комиссия", "зависим"]):
+    if any(x in text_l for x in ["зависим от wb", "зависим от ozon", "зависимость от маркетплейсов"]):
         return "marketplace_dependency"
-    if any(x in full_l for x in ["маржа", "юнит экономика", "юнит-экономика", "экономика проекта"]):
+    if any(x in text_l for x in ["маржа падает", "комиссия съедает", "экономика", "маржа"]):
         return "margin_pressure"
-    if any(x in full_l for x in ["сайт", "direct", "интернет-магазин", "трафик на сайт"]):
+    if any(x in text_l for x in ["хотим свой сайт", "хотим direct", "запускаем сайт"]):
         return "direct_growth_need"
-    if any(x in full_l for x in CHANGE_EVENT_PATTERNS):
+    if any(x in text_l for x in CHANGE_EVENT_PATTERNS):
         return "change_event"
     return None
-
 
 
 def build_recommended_opener(text_l: str, message_type: str, lead_fit: str) -> str:
@@ -322,7 +392,6 @@ def build_recommended_opener(text_l: str, message_type: str, lead_fit: str) -> s
     return "Нужен ручной разбор цепочки сообщений."
 
 
-
 def _build_lead_fit(
     *,
     message_type: str,
@@ -335,42 +404,49 @@ def _build_lead_fit(
     icp_score: int,
     intent_score: int,
     participant_score: int,
+    live_help_score: int,
+    operational_score: int,
+    editorial_penalty: int,
 ) -> tuple[str, str]:
     if message_type in {"service_ad", "vacancy", "supplier_ad"} or author_type_guess == "contractor":
         return "contractor", "ignore"
 
+    if message_type in {"expert_content", "market_intelligence", "noise"} and editorial_penalty >= 4:
+        return "noise", "ignore"
+
     strong_target = (
-        pain_score >= 8
-        and (icp_score >= 4 or intent_score >= 4)
-        and (contactability_score >= 1 or participant_score >= 2)
+        message_type in {"self_pain", "participant_pain"}
+        and pain_score >= 8
+        and (live_help_score >= 4 or operational_score >= 3 or intent_score >= 4)
+        and (icp_score >= 4 or participant_score >= 4)
+        and contactability_score >= 1
+        and editorial_penalty < 4
     )
     participant_target = (
         message_type == "participant_pain"
         and first_person_pain_score >= 6
         and pain_score >= 8
-        and (icp_score >= 2 or intent_score >= 2 or conversation_score >= 3)
+        and (conversation_score >= 3 or live_help_score >= 4 or operational_score >= 3)
+        and editorial_penalty < 4
     )
 
+    if strong_target or participant_target:
+        return "target", "outreach_now"
+
     if message_type in {"self_pain", "participant_pain"}:
-        if strong_target or participant_target:
-            return "target", "outreach_now"
-        if pain_score >= 6 or intent_score >= 4 or first_person_pain_score >= 4:
+        if (pain_score >= 6 and (live_help_score >= 2 or operational_score >= 2 or intent_score >= 2)) or (intent_score >= 4 and icp_score >= 2) or (live_help_score >= 3 and icp_score >= 4):
             return "review", "research_company"
         return "noise", "ignore"
 
     if message_type == "peer_question":
-        if (intent_score >= 4 and icp_score >= 2) or signal_score >= 11:
+        if live_help_score >= 2 and icp_score >= 2 and editorial_penalty < 4:
             return "review", "research_company"
         return "noise", "ignore"
 
-    if message_type in {"expert_content", "market_intelligence"}:
-        return "noise", "ignore"
-
-    if first_person_pain_score >= 4 and signal_score >= 9 and (pain_score >= 5 or intent_score >= 3):
+    if first_person_pain_score >= 4 and signal_score >= 10 and (pain_score >= 5 or intent_score >= 3):
         return "review", "research_company"
 
     return "noise", "ignore"
-
 
 
 def classify_signal(
@@ -393,38 +469,46 @@ def classify_signal(
     conversation_l = conversation_text.lower()
     full_l = "\n".join(part for part in [text_l, context_l, conversation_l] if part)
     chat_title_l = (chat_title or "").lower()
+    chat_username_l = (chat_username or "").lower()
+    chat_haystack = f"{chat_title_l} {chat_username_l}".strip()
 
-    pain_hits = _contains_any(full_l, PAIN_KEYWORDS)
-    intent_hits = _contains_any(full_l, INTENT_KEYWORDS)
+    pain_hits = _contains_any(text_l, PAIN_KEYWORDS)
+    intent_hits = _contains_any(text_l, INTENT_KEYWORDS)
     direct_hits = _contains_any(full_l, DIRECT_KEYWORDS)
     brand_hits = _contains_any(full_l, BRAND_KEYWORDS)
     noise_hits = _contains_any(text_l, NOISE_KEYWORDS)
 
     author_type_guess, owner_likelihood_score, contractor_penalty = _guess_author_type(full_l)
 
-    first_person_hits = [p for p in FIRST_PERSON_PAIN_PATTERNS if p in full_l]
+    first_person_hits = [p for p in FIRST_PERSON_PAIN_PATTERNS if p in text_l]
     expert_hits = [p for p in EXPERT_CONTENT_PATTERNS if p in text_l]
+    editorial_hits = [p for p in EDITORIAL_PATTERNS if p in text_l]
     market_hits = [p for p in MARKET_OBSERVATION_PATTERNS if p in text_l]
     supplier_hits = [p for p in SUPPLIER_AD_PATTERNS if p in text_l]
     channel_hits = [p for p in CHANNEL_AUTHOR_PATTERNS if p in text_l]
-    change_event_hits = [p for p in CHANGE_EVENT_PATTERNS if p in full_l]
-    weak_review_hits = [p for p in WEAK_REVIEW_PATTERNS if p in full_l]
+    official_hits = [p for p in OFFICIAL_MARKETPLACE_PATTERNS if p in text_l or p in chat_haystack]
+    change_event_hits = [p for p in CHANGE_EVENT_PATTERNS if p in text_l]
+    weak_review_hits = [p for p in WEAK_REVIEW_PATTERNS if p in text_l]
     owner_role_hits = [p for p in OWNER_ROLE_PATTERNS if p in full_l]
     business_scope_hits = [p for p in BUSINESS_SCOPE_PATTERNS if p in full_l]
-    marketing_pain_hits = [p for p in MARKETING_PAIN_PATTERNS if p in full_l]
+    marketing_pain_hits = [p for p in MARKETING_PAIN_PATTERNS if p in text_l]
+    live_help_hits = [p for p in LIVE_HELP_PATTERNS if p in text_l]
+    operational_hits = [p for p in OPERATIONAL_PAIN_PATTERNS if p in text_l]
 
     first_person_pain_score = len(first_person_hits) * 3
+    live_help_score = len(live_help_hits) * 3
+    operational_score = len(operational_hits)
 
     participant_score = 0
     if reply_depth >= 1:
         participant_score += 2
     if reply_depth >= 1 and first_person_hits:
         participant_score += 3
-    if reply_depth >= 1 and (pain_hits or marketing_pain_hits):
+    if reply_depth >= 1 and (pain_hits or marketing_pain_hits or live_help_hits):
         participant_score += 2
 
-    pain_score = len(pain_hits) * 3 + len(marketing_pain_hits) * 2 + first_person_pain_score
-    intent_score = len(intent_hits) * 4 + len(change_event_hits) * 2
+    pain_score = len(pain_hits) * 3 + len(marketing_pain_hits) * 2 + first_person_pain_score + live_help_score + operational_score
+    intent_score = len(intent_hits) * 4 + len(change_event_hits) * 2 + len(live_help_hits) * 2
     icp_score = len(direct_hits) * 2 + len(brand_hits) * 2 + len(owner_role_hits) * 2 + len(business_scope_hits)
 
     if any(x in full_l for x in ["wb", "ozon", "маркетплейс", "селлер", "seller", "sku", "карточк", "интернет-магазин", "сайт"]):
@@ -435,33 +519,35 @@ def classify_signal(
         context_score += 2
     if conversation_text.strip() and conversation_text.strip() != text.strip():
         context_score += 2
-    if any(x in full_l for x in ["кто посоветует", "посоветуйте", "не окупается", "ищем", "у нас", "кто работал", "подскажите", "есть ли смысл"]):
-        context_score += 2
     if reply_depth >= 1:
         context_score += min(reply_depth, 3)
+    if live_help_hits:
+        context_score += 2
 
     conversation_score = 0
     if reply_depth >= 1:
         conversation_score += 2
     if context_text.strip():
         conversation_score += 1
-    if pain_hits and intent_hits:
+    if pain_hits and (intent_hits or live_help_hits):
         conversation_score += 2
-    if first_person_hits and (pain_hits or direct_hits or brand_hits or change_event_hits or marketing_pain_hits):
+    if first_person_hits and (pain_hits or direct_hits or brand_hits or change_event_hits or marketing_pain_hits or live_help_hits):
         conversation_score += 2
     if participant_score >= 4:
         conversation_score += 2
 
-    promo_penalty = 0
+    editorial_penalty = len(editorial_hits) * 3 + len(channel_hits) * 2 + len(official_hits) * 3
+    promo_penalty = editorial_penalty
     if any(x in text_l for x in ["напишите в лс", "есть кейсы", "помогаем", "делаем под ключ", "инфографика", "дизайн карточек"]):
         promo_penalty += 6
     if weak_review_hits:
         promo_penalty += 5
     promo_penalty += len(expert_hits) * 2
-    promo_penalty += len(channel_hits) * 2
-
     if "рекламщик" in chat_title_l or "capital" in chat_title_l:
         promo_penalty += 3
+
+    has_live_problem = bool(first_person_hits or live_help_hits or operational_hits)
+    is_editorial = editorial_penalty >= 4 or bool(editorial_hits or channel_hits or official_hits)
 
     if noise_hits:
         message_type = "noise"
@@ -469,26 +555,26 @@ def classify_signal(
         message_type = "vacancy"
     elif supplier_hits or weak_review_hits:
         message_type = "supplier_ad"
-    elif author_type_guess == "contractor" and not pain_hits and not intent_hits and not change_event_hits:
+    elif is_editorial and not has_live_problem:
+        message_type = "expert_content"
+    elif author_type_guess == "contractor" and not pain_hits and not intent_hits and not change_event_hits and not live_help_hits:
         message_type = "service_ad"
-    elif reply_depth >= 1 and first_person_hits and (pain_hits or intent_hits or direct_hits or brand_hits or change_event_hits or marketing_pain_hits):
+    elif reply_depth >= 1 and has_live_problem and (pain_hits or intent_hits or direct_hits or brand_hits or change_event_hits or marketing_pain_hits or live_help_hits):
         message_type = "participant_pain"
-    elif first_person_hits and (pain_hits or intent_hits or direct_hits or brand_hits or change_event_hits or marketing_pain_hits):
+    elif has_live_problem and (pain_hits or intent_hits or direct_hits or brand_hits or change_event_hits or marketing_pain_hits or live_help_hits):
         message_type = "self_pain"
-    elif change_event_hits and (direct_hits or brand_hits or intent_hits):
-        message_type = "self_pain"
-    elif any(x in full_l for x in ["кто посоветует", "посоветуйте", "кто работал", "подскажите", "есть ли смысл"]):
+    elif live_help_hits and (direct_hits or brand_hits or intent_hits or operational_hits):
         message_type = "peer_question"
     elif expert_hits:
         message_type = "expert_content"
-    elif market_hits and not first_person_hits:
+    elif market_hits and not has_live_problem:
         message_type = "market_intelligence"
     else:
         message_type = "noise"
 
-    conversation_type = _guess_conversation_type(full_l, bool(intent_hits), bool(pain_hits or marketing_pain_hits), author_type_guess)
+    conversation_type = _guess_conversation_type(full_l, bool(intent_hits or live_help_hits), bool(pain_hits or marketing_pain_hits or operational_hits), author_type_guess)
 
-    matched = pain_hits + intent_hits + direct_hits + brand_hits + first_person_hits + change_event_hits + marketing_pain_hits
+    matched = pain_hits + intent_hits + direct_hits + brand_hits + first_person_hits + change_event_hits + marketing_pain_hits + live_help_hits + operational_hits
     seen: list[str] = []
     matched_keywords: list[str] = []
     for keyword in matched:
@@ -496,7 +582,7 @@ def classify_signal(
             seen.append(keyword)
             matched_keywords.append(keyword)
 
-    pain_detected = sorted({kw for kw in pain_hits + first_person_hits + marketing_pain_hits})
+    pain_detected = sorted({kw for kw in pain_hits + first_person_hits + marketing_pain_hits + live_help_hits + operational_hits})
     icp_detected = sorted({kw for kw in direct_hits + brand_hits + business_scope_hits + owner_role_hits})
 
     contactability_score = 0
@@ -540,9 +626,9 @@ def classify_signal(
 
     signal_score = max(final_lead_score, 0)
 
-    if signal_score >= 18:
+    if signal_score >= 20:
         signal_level = "high"
-    elif signal_score >= 10:
+    elif signal_score >= 12:
         signal_level = "medium"
     else:
         signal_level = "low"
@@ -558,16 +644,21 @@ def classify_signal(
         icp_score=icp_score,
         intent_score=intent_score,
         participant_score=participant_score,
+        live_help_score=live_help_score,
+        operational_score=operational_score,
+        editorial_penalty=editorial_penalty,
     )
     is_actionable = lead_fit == "target"
 
     reasons = []
     if reply_depth >= 1:
         reasons.append("лид найден в обсуждении / комментариях")
+    if live_help_hits:
+        reasons.append("есть живой запрос на помощь")
     if first_person_hits:
         reasons.append("есть first-person сигнал боли/запроса")
-    if pain_hits or marketing_pain_hits:
-        reasons.append("есть боль по экономике/марже/зависимости")
+    if pain_hits or marketing_pain_hits or operational_hits:
+        reasons.append("есть боль по экономике/рекламе/продажам")
     if intent_hits:
         reasons.append("есть запрос на решение или подрядчика")
     if change_event_hits:

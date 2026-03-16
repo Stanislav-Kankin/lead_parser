@@ -42,6 +42,8 @@ TELEGRAM_SIGNAL_REQUIRED_COLUMNS = {
     "contact_hint": "ALTER TABLE telegram_signals ADD COLUMN contact_hint VARCHAR",
     "lead_fit": "ALTER TABLE telegram_signals ADD COLUMN lead_fit VARCHAR DEFAULT 'noise'",
     "next_step": "ALTER TABLE telegram_signals ADD COLUMN next_step VARCHAR",
+    "review_status": "ALTER TABLE telegram_signals ADD COLUMN review_status VARCHAR DEFAULT 'unchecked'",
+    "reviewed_at": "ALTER TABLE telegram_signals ADD COLUMN reviewed_at DATETIME",
     "is_actionable": "ALTER TABLE telegram_signals ADD COLUMN is_actionable BOOLEAN DEFAULT 0"
 }
 

@@ -72,12 +72,13 @@ def get_signals(
             else_=1,
         )
         stmt = stmt.order_by(
-            desc(TelegramSignal.message_date),
             desc(TelegramSignal.final_lead_score),
             desc(TelegramSignal.conversation_score),
+            desc(TelegramSignal.reply_depth),
+            desc(TelegramSignal.contactability_score),
             desc(level_order),
             desc(TelegramSignal.signal_score),
-            desc(TelegramSignal.reply_depth),
+            desc(TelegramSignal.message_date),
             desc(TelegramSignal.created_at),
         )
         if limit:
