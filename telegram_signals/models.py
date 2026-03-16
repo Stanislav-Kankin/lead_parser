@@ -67,5 +67,7 @@ class TelegramSignal(Base):
     contact_hint = Column(String, nullable=True)
 
     status = Column(String, nullable=False, default="new")
+    review_status = Column(String, nullable=False, default="unchecked")
+    reviewed_at = Column(DateTime, nullable=True)
     is_actionable = Column(Boolean, nullable=False, default=False)
     created_at = Column(DateTime, default=datetime.utcnow, nullable=False)

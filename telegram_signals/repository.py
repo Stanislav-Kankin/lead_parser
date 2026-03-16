@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from typing import Iterable
 
+from datetime import datetime
+
 from sqlalchemy import case, desc, or_, select
 
 from storage.db import SessionLocal
@@ -42,6 +44,8 @@ def get_signals(
     business_only: bool = False,
     lead_fit: str | None = None,
     lead_fit_in: list[str] | None = None,
+    review_status: str | None = None,
+    review_status_in: list[str] | None = None,
 ) -> list[TelegramSignal]:
     with SessionLocal() as session:
         stmt = select(TelegramSignal)
@@ -57,6 +61,10 @@ def get_signals(
             stmt = stmt.where(TelegramSignal.lead_fit == lead_fit)
         if lead_fit_in:
             stmt = stmt.where(TelegramSignal.lead_fit.in_(lead_fit_in))
+        if review_status:
+            stmt = stmt.where(TelegramSignal.review_status == review_status)
+        if review_status_in:
+            stmt = stmt.where(TelegramSignal.review_status.in_(review_status_in))
 
         level_order = case(
             (TelegramSignal.signal_level == "high", 3),
@@ -77,12 +85,14 @@ def get_signals(
         return list(session.execute(stmt).scalars().all())
 
 
-def get_target_leads(segment: str | None = None, limit: int | None = None) -> list[TelegramSignal]:
-    return get_signals(segment=segment, limit=limit, lead_fit="target")
+def get_target_leads(segment: str | None = None, limit: int | None = None, *, include_reviewed: bool = False) -> list[TelegramSignal]:
+    kwargs = {} if include_reviewed else {"review_status": "unchecked"}
+    return get_signals(segment=segment, limit=limit, lead_fit="target", **kwargs)
 
 
-def get_review_leads(segment: str | None = None, limit: int | None = None) -> list[TelegramSignal]:
-    return get_signals(segment=segment, limit=limit, lead_fit="review")
+def get_review_leads(segment: str | None = None, limit: int | None = None, *, include_reviewed: bool = False) -> list[TelegramSignal]:
+    kwargs = {} if include_reviewed else {"review_status": "unchecked"}
+    return get_signals(segment=segment, limit=limit, lead_fit="review", **kwargs)
 
 
 def get_discussion_leads(segment: str | None = None, limit: int | None = None) -> list[TelegramSignal]:
@@ -131,3 +141,18 @@ def get_market_intelligence(segment: str | None = None, limit: int | None = None
         if limit:
             stmt = stmt.limit(limit)
         return list(session.execute(stmt).scalars().all())
+
+
+def get_reviewed_leads(review_status: str, segment: str | None = None, limit: int | None = None) -> list[TelegramSignal]:
+    return get_signals(segment=segment, limit=limit, lead_fit_in=["target", "review"], review_status=review_status)
+
+
+def set_signal_review_status(signal_id: int, review_status: str) -> bool:
+    with SessionLocal() as session:
+        item = session.get(TelegramSignal, signal_id)
+        if item is None:
+            return False
+        item.review_status = review_status
+        item.reviewed_at = datetime.utcnow()
+        session.commit()
+        return True

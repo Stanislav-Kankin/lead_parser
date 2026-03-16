@@ -108,6 +108,7 @@ def _ensure_telegram_signal_columns():
         conn.execute(text("UPDATE telegram_signals SET source_type = COALESCE(source_type, 'chat_message')"))
         conn.execute(text("UPDATE telegram_signals SET is_comment = COALESCE(is_comment, 0)"))
         conn.execute(text("UPDATE telegram_signals SET is_actionable = COALESCE(is_actionable, 0)"))
+        conn.execute(text("UPDATE telegram_signals SET review_status = COALESCE(review_status, 'unchecked')"))
         conn.execute(text("UPDATE telegram_signals SET final_lead_score = COALESCE(final_lead_score, signal_score, 0)"))
         conn.execute(text("UPDATE telegram_signals SET icp_score = COALESCE(icp_score, 0)"))
         conn.execute(text("UPDATE telegram_signals SET pain_score = COALESCE(pain_score, 0)"))

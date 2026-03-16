@@ -20,14 +20,17 @@ from telegram_signals.repository import (
     get_discussion_leads,
     get_market_intelligence,
     get_review_leads,
+    get_reviewed_leads,
     get_signals,
     get_target_leads,
+    set_signal_review_status,
 )
 from telegram_signals.service import collect_signals
 from utils.domain_normalizer import normalize_domain
 
 router = Router()
 SEARCH_RESULTS_CACHE: dict[int, list[dict]] = {}
+PAGE_JUMP_STATE: dict[int, dict] = {}
 
 TG_MESSAGE_LIMIT = 3900
 
@@ -140,6 +143,45 @@ def _lead_list_header(title: str, page: int, total_pages: int, segment_label: st
 def _build_lead_page(title: str, items, page: int, total_pages: int, segment_label: str) -> str:
     signal = items[page]
     return "\n\n".join([_lead_list_header(title, page, total_pages, segment_label, len(items)), format_sales_lead_card(page + 1, signal)])
+
+
+def _get_sales_view_payload(view: str, segment_filter: str | None):
+    segment_label = _ru_segment(segment_filter or "all")
+    if view == "tg_targets":
+        return "🎯 Писать сейчас", _dedupe_signals_to_leads(get_target_leads(segment=segment_filter, limit=None)), segment_label
+    if view == "tg_review":
+        return "🟡 Проверить", _dedupe_signals_to_leads(get_review_leads(segment=segment_filter, limit=None)), segment_label
+    if view == "tg_ok":
+        return "✅ ОК лиды", _dedupe_signals_to_leads(get_reviewed_leads("ok", segment=segment_filter, limit=None)), segment_label
+    if view == "tg_not_ok":
+        return "❌ Не ОК лиды", _dedupe_signals_to_leads(get_reviewed_leads("not_ok", segment=segment_filter, limit=None)), segment_label
+    return "Лиды", [], segment_label
+
+
+def _view_empty_text(view: str) -> str:
+    mapping = {
+        "tg_targets": "Пока лидов для быстрого outreach нет. Сначала обнови один из сегментов.",
+        "tg_review": "Пока лидов для ручной проверки нет. Сначала обнови один из сегментов.",
+        "tg_ok": "Пока нет лидов, которые ты отметил как ОК.",
+        "tg_not_ok": "Пока нет лидов, которые ты отметил как не ОК.",
+    }
+    return mapping.get(view, "Пока данных нет.")
+
+
+async def _render_sales_view(callback: CallbackQuery, view: str, page: int, segment_filter: str | None) -> None:
+    title, items, segment_label = _get_sales_view_payload(view, segment_filter)
+    if not items:
+        await _send_or_edit(callback, _view_empty_text(view), reply_markup=telegram_signals_menu())
+        return
+
+    total_pages = len(items)
+    page = max(0, min(page, total_pages - 1))
+    text = _build_lead_page(title, items, page, total_pages, segment_label)
+    await _send_or_edit(
+        callback,
+        text,
+        reply_markup=sales_lead_keyboard(view, page, total_pages, items[page], extra=(segment_filter or "all")),
+    )
 
 
 def sales_lead_keyboard(prefix: str, page: int, total_pages: int, signal, *, extra: str | None = None):
@@ -309,43 +351,64 @@ async def tg_list(callback: CallbackQuery):
 @router.callback_query(F.data.startswith("tg_targets:"))
 async def tg_targets(callback: CallbackQuery):
     segment_filter, page = _parse_segment_page(callback.data or "")
-    items = _dedupe_signals_to_leads(get_target_leads(segment=segment_filter, limit=None))
-    if not items:
-        await _send_or_edit(callback, "Пока лидов для быстрого outreach нет. Сначала обнови один из сегментов.", reply_markup=telegram_signals_menu())
-        await callback.answer()
-        return
-
-    total_pages = len(items)
-    page = min(page, total_pages - 1)
-    text = _build_lead_page("🎯 Писать сейчас", items, page, total_pages, _ru_segment(segment_filter or "all"))
-
-    await _send_or_edit(
-        callback,
-        text,
-        reply_markup=sales_lead_keyboard("tg_targets", page, total_pages, items[page], extra=(segment_filter or "all")),
-    )
+    await _render_sales_view(callback, "tg_targets", page, segment_filter)
     await callback.answer()
 
 
 @router.callback_query(F.data.startswith("tg_review:"))
 async def tg_review(callback: CallbackQuery):
     segment_filter, page = _parse_segment_page(callback.data or "")
-    items = _dedupe_signals_to_leads(get_review_leads(segment=segment_filter, limit=None))
-    if not items:
-        await _send_or_edit(callback, "Пока лидов для ручной проверки нет. Сначала обнови один из сегментов.", reply_markup=telegram_signals_menu())
+    await _render_sales_view(callback, "tg_review", page, segment_filter)
+    await callback.answer()
+
+
+@router.callback_query(F.data.startswith("tg_ok:"))
+async def tg_ok(callback: CallbackQuery):
+    segment_filter, page = _parse_segment_page(callback.data or "")
+    await _render_sales_view(callback, "tg_ok", page, segment_filter)
+    await callback.answer()
+
+
+@router.callback_query(F.data.startswith("tg_not_ok:"))
+async def tg_not_ok(callback: CallbackQuery):
+    segment_filter, page = _parse_segment_page(callback.data or "")
+    await _render_sales_view(callback, "tg_not_ok", page, segment_filter)
+    await callback.answer()
+
+
+@router.callback_query(F.data.startswith("jump:"))
+async def jump_to_page_prompt(callback: CallbackQuery):
+    parts = (callback.data or "").split(":", 2)
+    if len(parts) != 3:
         await callback.answer()
         return
-
-    total_pages = len(items)
-    page = min(page, total_pages - 1)
-    text = _build_lead_page("🟡 Проверить", items, page, total_pages, _ru_segment(segment_filter or "all"))
-
-    await _send_or_edit(
-        callback,
-        text,
-        reply_markup=sales_lead_keyboard("tg_review", page, total_pages, items[page], extra=(segment_filter or "all")),
-    )
+    _, view, segment = parts
+    PAGE_JUMP_STATE[callback.from_user.id] = {"view": view, "segment": None if segment == "all" else segment}
     await callback.answer()
+    await callback.message.answer("Введи номер страницы сообщением. Например: 15")
+
+
+@router.callback_query(F.data.startswith("mark:"))
+async def mark_lead(callback: CallbackQuery):
+    parts = (callback.data or "").split(":")
+    if len(parts) != 6:
+        await callback.answer("Не удалось обработать отметку", show_alert=True)
+        return
+    _, review_status, signal_id_raw, view, page_raw, segment = parts
+    try:
+        signal_id = int(signal_id_raw)
+        page = int(page_raw)
+    except Exception:
+        await callback.answer("Некорректные данные", show_alert=True)
+        return
+
+    if not set_signal_review_status(signal_id, review_status):
+        await callback.answer("Лид не найден", show_alert=True)
+        return
+
+    segment_filter = None if segment == "all" else segment
+    await callback.answer("Статус обновлён")
+    await _render_sales_view(callback, view, page, segment_filter)
 
 
 @router.callback_query(F.data.startswith("tg_actionable:"))
@@ -525,6 +588,23 @@ async def search_page(callback: CallbackQuery):
 
 
 @router.message()
+async def handle_page_jump(message: Message):
+    state = PAGE_JUMP_STATE.get(message.from_user.id if message.from_user else 0)
+    if not state:
+        return
+
+    text_value = (message.text or "").strip()
+    if not text_value.isdigit():
+        await message.answer("Нужен номер страницы цифрами. Например: 12")
+        return
+
+    page = max(0, int(text_value) - 1)
+    callback_stub = type("CallbackStub", (), {"message": message})()
+    await _render_sales_view(callback_stub, state["view"], page, state.get("segment"))
+    PAGE_JUMP_STATE.pop(message.from_user.id, None)
+
+
+@router.message()
 async def handle_query(message: Message):
     query = (message.text or "").strip()
     if not query:
@@ -701,22 +781,33 @@ def format_sales_lead_card(idx: int, signal) -> str:
     pain_hypothesis = _build_lead_summary(signal)
     context = _trim_text(getattr(signal, "text_excerpt", None) or getattr(signal, "message_text", None) or "-", 280)
     opener = _trim_text(getattr(signal, "recommended_opener", None) or "-", 220)
-    chat_name = getattr(signal, 'chat_title', None) or '-'
-    username_to_write = getattr(signal, 'author_username', None)
-    if username_to_write:
-        username_to_write = f"@{str(username_to_write).lstrip('@')}"
-    else:
-        username_to_write = "-"
+    chat_name = getattr(signal, "chat_title", None) or "-"
+    username_raw = getattr(signal, "author_username", None)
+    username_to_write = f"@{str(username_raw).lstrip('@')}" if username_raw else (getattr(signal, "author_name", None) or "-")
 
-    message_date = getattr(signal, 'message_date', None)
-    actual_label = '-'
+    profile_url = _build_contact_link(signal)
+    chat_url = getattr(signal, "chat_url", None)
+
+    message_date = getattr(signal, "message_date", None)
+    actual_label = "-"
     if message_date:
-        actual_label = message_date.strftime('%d.%m.%Y %H:%M')
+        actual_label = message_date.strftime("%d.%m.%Y %H:%M")
+
+    who_line = escape_html(username_to_write)
+    if profile_url:
+        who_line = f'<a href="{escape_html(profile_url)}">{escape_html(username_to_write)}</a>'
+
+    chat_line = escape_html(chat_name)
+    if chat_url:
+        chat_line = f'<a href="{escape_html(chat_url)}">{escape_html(chat_name)}</a>'
+
+    profile_line = who_line if profile_url else escape_html(username_to_write)
 
     return (
         f"<b>{idx}. {escape_html(username)}</b>\n"
-        f"<b>Кому писать:</b> {escape_html(username_to_write)}\n"
-        f"<b>Чат:</b> {escape_html(chat_name)}\n"
+        f"<b>Кому писать:</b> {who_line}\n"
+        f"<b>Профиль/username:</b> {profile_line}\n"
+        f"<b>Чат:</b> {chat_line}\n"
         f"<b>Актуальность:</b> {escape_html(actual_label)}\n"
         f"<b>Сообщение:</b> {escape_html(context)}\n"
         f"<b>Контекст:</b> {escape_html(_trim_text(getattr(signal, 'why_actionable', None) or getattr(signal, 'conversation_type', None) or '-', 160))}\n"
@@ -747,11 +838,12 @@ def format_signal_card(idx: int, signal) -> str:
         f"<b>Автор-профиль:</b> {escape_html(author_type)}\n"
         f"<b>Уровень:</b> {escape_html(_ru_signal_level(signal.signal_level))}\n"
         f"<b>Lead score:</b> {primary_score} | <b>Signal score:</b> {signal.signal_score}\n"
-        f"<b>Контакт:</b> {escape_html(getattr(signal, 'contact_hint', None) or signal.author_username or signal.chat_url or '-')}\n"
+        f"<b>Контакт:</b> {escape_html(getattr(signal, 'contact_hint', None) or signal.author_username or '-') }\n"
         f"<b>Компания/сайт:</b> {escape_html(company)}\n"
         f"<b>Почему в выдаче:</b> {escape_html(why)}\n"
         f"<b>Фрагмент:</b> {escape_html(_trim_text(signal.text_excerpt or '-', 240))}\n"
         f"<b>Заход:</b> {escape_html(_trim_text(signal.recommended_opener or '-', 180))}\n"
+        f"<b>Username:</b> {escape_html(str(getattr(signal, 'author_username', None) or '-'))}\n"
         f"<b>Ссылка на чат:</b> {escape_html(signal.chat_url or '-')}"
     )
 

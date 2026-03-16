@@ -11,6 +11,7 @@ from telegram_signals.repository import (
     get_discussion_leads,
     get_market_intelligence,
     get_review_leads,
+    get_reviewed_leads,
     get_signals,
     get_target_leads,
 )
@@ -36,6 +37,14 @@ def export_signals_to_xlsx(kind: str = "actionable") -> Path:
         items = get_review_leads()
         suffix = "review"
         title = "review_leads"
+    elif kind == "ok":
+        items = get_reviewed_leads("ok")
+        suffix = "ok_leads"
+        title = "ok_leads"
+    elif kind == "not_ok":
+        items = get_reviewed_leads("not_ok")
+        suffix = "not_ok_leads"
+        title = "not_ok_leads"
     elif kind == "raw":
         items = get_signals(limit=None)
         suffix = "raw"
@@ -80,6 +89,8 @@ def export_signals_to_xlsx(kind: str = "actionable") -> Path:
         "recommended_opener",
         "chat_url",
         "conversation_key",
+        "review_status",
+        "reviewed_at",
     ]
     ws.append(headers)
     for cell in ws[1]:
@@ -109,6 +120,8 @@ def export_signals_to_xlsx(kind: str = "actionable") -> Path:
             item.recommended_opener or "",
             item.chat_url or "",
             item.conversation_key or "",
+            item.review_status or "",
+            str(item.reviewed_at)[:19] if item.reviewed_at else "",
         ])
 
     _autosize(ws)
