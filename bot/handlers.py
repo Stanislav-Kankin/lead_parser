@@ -50,7 +50,10 @@ def _build_contact_link(signal) -> str | None:
     if author_username:
         username = str(author_username).lstrip("@")
         return f"https://t.me/{username}"
-    return getattr(signal, "chat_url", None)
+    author_id = str(getattr(signal, "author_id", None) or "").strip()
+    if author_id and author_id.lstrip("-").isdigit():
+        return f"tg://user?id={author_id}"
+    return None
 
 
 def _build_message_link(signal) -> str | None:
@@ -119,10 +122,13 @@ def _build_outreach_text(signal) -> str:
     )
 
 
-def _outreach_target(signal) -> str | None:
+def _outreach_target(signal) -> str | int | None:
     username = getattr(signal, "author_username", None)
     if username:
         return f"@{str(username).lstrip('@')}"
+    author_id = str(getattr(signal, "author_id", None) or "").strip()
+    if author_id and author_id.lstrip("-").isdigit():
+        return int(author_id)
     return None
 
 
@@ -226,7 +232,7 @@ def _build_lead_page(title: str, items, page: int, total_pages: int, segment_lab
 def _get_sales_view_payload(view: str, segment_filter: str | None):
     segment_label = _ru_segment(segment_filter or "all")
     if view == "tg_targets":
-        return "🎯 Писать сейчас", _dedupe_signals_to_leads(get_target_leads(segment=segment_filter, limit=None)), segment_label
+        return "🎯 Auto-target", _dedupe_signals_to_leads(get_target_leads(segment=segment_filter, limit=None)), segment_label
     if view == "tg_review":
         return "🟡 Проверить компанию", _dedupe_signals_to_leads(get_review_leads(segment=segment_filter, limit=None)), segment_label
     if view == "tg_ok":
@@ -238,9 +244,9 @@ def _get_sales_view_payload(view: str, segment_filter: str | None):
 
 def _view_empty_text(view: str) -> str:
     mapping = {
-        "tg_targets": "Пока лидов для быстрого outreach нет. Сначала обнови один из сегментов.",
-        "tg_review": "Пока лидов для ручной проверки нет. Сначала обнови один из сегментов.",
-        "tg_ok": "Пока нет лидов, которые ты отметил как ОК.",
+        "tg_targets": "Пока авто-target пустой. Рабочий путь: открыть Проверить, отметить ОК и писать из ОК.",
+        "tg_review": "Пока нет свежих лидов за 48 часов. Нажми «Собрать боли WB/Ozon → сайт/Кит».",
+        "tg_ok": "Пока нет ОК-лидов. Сначала отметь подходящих людей в «Проверить».",
         "tg_not_ok": "Пока нет лидов, которые ты отметил как не ОК.",
     }
     return mapping.get(view, "Пока данных нет.")
@@ -285,30 +291,42 @@ def sales_lead_keyboard(prefix: str, page: int, total_pages: int, signal, *, ext
         if _outreach_target(signal):
             rows.append([
                 InlineKeyboardButton(
-                    text="✉️ Написать",
+                    text="✉️ Написать лиду по черновику",
                     callback_data=f"draft_msg:{signal_id}:{prefix}:{page}:{segment}",
                 )
             ])
-        rows.append([
-            InlineKeyboardButton(
-                text="✅ ОК лид",
-                callback_data=f"mark:ok:{signal_id}:{prefix}:{page}:{segment}",
-            ),
-            InlineKeyboardButton(
-                text="❌ не ОК лид",
-                callback_data=f"mark:not_ok:{signal_id}:{prefix}:{page}:{segment}",
-            ),
-        ])
+        if prefix == "tg_ok":
+            rows.append([
+                InlineKeyboardButton(
+                    text="❌ Убрать из ОК",
+                    callback_data=f"mark:not_ok:{signal_id}:{prefix}:{page}:{segment}",
+                )
+            ])
+        elif prefix == "tg_not_ok":
+            rows.append([
+                InlineKeyboardButton(
+                    text="✅ Вернуть в ОК",
+                    callback_data=f"mark:ok:{signal_id}:{prefix}:{page}:{segment}",
+                )
+            ])
+        else:
+            rows.append([
+                InlineKeyboardButton(
+                    text="✅ ОК лид",
+                    callback_data=f"mark:ok:{signal_id}:{prefix}:{page}:{segment}",
+                ),
+                InlineKeyboardButton(
+                    text="❌ не ОК лид",
+                    callback_data=f"mark:not_ok:{signal_id}:{prefix}:{page}:{segment}",
+                ),
+            ])
 
     open_message = _build_message_link(signal)
-    open_chat = getattr(signal, "chat_url", None)
     open_contact = _build_contact_link(signal)
     action_row = []
     if open_message:
         action_row.append(InlineKeyboardButton(text="Открыть сообщение", url=open_message))
-    if open_chat:
-        action_row.append(InlineKeyboardButton(text="Чат", url=open_chat))
-    if open_contact and open_contact != open_chat:
+    if open_contact:
         action_row.append(InlineKeyboardButton(text="Профиль", url=open_contact))
     if action_row:
         rows.append(action_row)
@@ -451,8 +469,9 @@ async def tg_collect(callback: CallbackQuery):
 
     await callback.message.answer(
         "Поиск завершён.\n"
+        f"Окно свежести: <b>48 часов</b>.\n"
         f"Сырых сигналов: <b>{totals['created']}</b> новых, <b>{totals['updated']}</b> обновлено.\n"
-        f"Просмотрено чатов: <b>{totals['scanned_chats']}</b>, сообщений: <b>{totals['scanned_messages']}</b>.\n"
+        f"Просмотрено чатов: <b>{totals['scanned_chats']}</b>, свежих сообщений: <b>{totals['scanned_messages']}</b>.\n"
         f"В очередях сейчас: 🎯 <b>{len(_dedupe_signals_to_leads(get_target_leads(limit=None)))}</b>, "
         f"🟡 <b>{len(_dedupe_signals_to_leads(get_review_leads(limit=None)))}</b>.\n"
         f"Сырья после первичного фильтра: <b>{totals['kept_signals']}</b>.",
@@ -579,7 +598,7 @@ async def draft_outreach_message(callback: CallbackQuery):
     }
     text = (
         "<b>Черновик сообщения</b>\n"
-        f"<b>Кому:</b> {escape_html(target)}\n\n"
+        f"<b>Кому:</b> {escape_html(str(target))}\n\n"
         f"{escape_html(draft)}"
     )
     keyboard = InlineKeyboardMarkup(inline_keyboard=[
@@ -617,7 +636,7 @@ async def send_outreach_message(callback: CallbackQuery):
         await client.send_message(target, text)
     except Exception as exc:
         await callback.message.answer(
-            f"Не удалось отправить сообщение {escape_html(target)}: {escape_html(str(exc))}",
+            f"Не удалось отправить сообщение {escape_html(str(target))}: {escape_html(str(exc))}",
             parse_mode="HTML",
         )
         return
@@ -629,7 +648,7 @@ async def send_outreach_message(callback: CallbackQuery):
     segment = draft.get("segment") or "all"
     segment_filter = None if segment == "all" else segment
     await callback.message.answer(
-        f"Сообщение отправлено: <b>{escape_html(target)}</b>",
+        f"Сообщение отправлено: <b>{escape_html(str(target))}</b>",
         parse_mode="HTML",
     )
     await _render_sales_view(callback, view, page, segment_filter)

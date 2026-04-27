@@ -1,5 +1,6 @@
 import logging
 from typing import Any
+from datetime import datetime, timedelta, timezone
 
 from telethon.tl.types import Message
 
@@ -99,12 +100,24 @@ def _author_name(message: Message) -> str | None:
     return title or None
 
 
-async def _collect_messages_from_chat(client, chat, limit_per_chat: int) -> list[Message]:
+def _is_recent_message(message: Message, max_age_hours: int) -> bool:
+    message_date = getattr(message, "date", None)
+    if not message_date:
+        return False
+    if getattr(message_date, "tzinfo", None) is None:
+        message_date = message_date.replace(tzinfo=timezone.utc)
+    cutoff = datetime.now(timezone.utc) - timedelta(hours=max_age_hours)
+    return message_date >= cutoff
+
+
+async def _collect_messages_from_chat(client, chat, limit_per_chat: int, max_age_hours: int) -> list[Message]:
     messages: list[Message] = []
 
     async for msg in client.iter_messages(chat, limit=limit_per_chat):
         if not msg or not getattr(msg, "message", None):
             continue
+        if not _is_recent_message(msg, max_age_hours):
+            break
         messages.append(msg)
 
     return messages
@@ -133,7 +146,12 @@ def _matched_keywords(signal: dict) -> str:
     return str(value)
 
 
-async def collect_signals(segment: str, limit_chats: int = 12, limit_messages_per_chat: int = 80) -> dict:
+async def collect_signals(
+    segment: str,
+    limit_chats: int = 12,
+    limit_messages_per_chat: int = 80,
+    max_age_hours: int = 48,
+) -> dict:
     if segment not in CHAT_DISCOVERY_KEYWORDS:
         raise ValueError(f"Неизвестный сегмент: {segment}")
 
@@ -187,7 +205,7 @@ async def collect_signals(segment: str, limit_chats: int = 12, limit_messages_pe
             )
 
             try:
-                messages = await _collect_messages_from_chat(client, chat, limit_messages_per_chat)
+                messages = await _collect_messages_from_chat(client, chat, limit_messages_per_chat, max_age_hours)
             except Exception as exc:
                 logger.warning(
                     "[telegram_signals] scan_chat_failed chat=%s error=%s",
@@ -296,6 +314,7 @@ async def collect_signals(segment: str, limit_chats: int = 12, limit_messages_pe
             "scanned_chats": scanned_chats,
             "scanned_messages": scanned_messages,
             "kept_signals": kept_signals,
+            "max_age_hours": max_age_hours,
         }
 
     finally:

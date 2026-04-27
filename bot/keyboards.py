@@ -18,11 +18,10 @@ def telegram_signals_menu() -> InlineKeyboardMarkup:
         inline_keyboard=[
             [InlineKeyboardButton(text="🔄 Собрать боли WB/Ozon → сайт/Кит", callback_data="tg_collect:all")],
             [
-                InlineKeyboardButton(text="🎯 Писать сейчас", callback_data="tg_targets:0:all"),
                 InlineKeyboardButton(text="🟡 Проверить", callback_data="tg_review:0:all"),
+                InlineKeyboardButton(text="✉️ Написать ОК", callback_data="tg_ok:0:all"),
             ],
             [
-                InlineKeyboardButton(text="✅ Показать ОК", callback_data="tg_ok:0:all"),
                 InlineKeyboardButton(text="📤 Excel", callback_data="tg_export:actionable"),
             ],
             [InlineKeyboardButton(text="⚙️ Ещё", callback_data="tg_debug_menu")],
@@ -36,6 +35,7 @@ def telegram_signals_debug_menu() -> InlineKeyboardMarkup:
             [InlineKeyboardButton(text="Обновить WB / Ozon", callback_data="tg_collect:ecom_marketplace_pain")],
             [InlineKeyboardButton(text="Обновить сайт / direct", callback_data="tg_collect:ecom_direct_growth")],
             [InlineKeyboardButton(text="Обновить производители", callback_data="tg_collect:manufacturer_secondary")],
+            [InlineKeyboardButton(text="🎯 Auto-target", callback_data="tg_targets:0:all")],
             [InlineKeyboardButton(text="🔥 Все сигналы", callback_data="tg_list:0:all")],
             [InlineKeyboardButton(text="💬 Обсуждения с болью", callback_data="tg_discussions:0:all")],
             [InlineKeyboardButton(text="🏢 Похожи на бизнес", callback_data="tg_business:0:all")],
