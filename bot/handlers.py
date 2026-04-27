@@ -154,6 +154,30 @@ def _build_outreach_text(signal) -> str:
     )
 
 
+def _ru_outreach_segment(value: str | None) -> str:
+    mapping = {
+        "mp_operations": "Операционка MP",
+        "mp_accounting": "Документы/учёт MP",
+        "mp_demand": "Спрос/карточка",
+        "mp_unit_economics": "Экономика/маржа",
+        "direct_channel_interest": "Интерес к direct/Кит",
+        "vendor_search": "Ищет подрядчика",
+        "mp_general_pain": "Общая боль MP",
+        "ignore": "Игнор",
+    }
+    return mapping.get(value or "", value or "-")
+
+
+def _ru_outreach_stage(value: str | None) -> str:
+    mapping = {
+        "awareness": "Осознание",
+        "problem_aware": "Понимает проблему",
+        "solution_search": "Ищет решение",
+        "ignore": "Игнор",
+    }
+    return mapping.get(value or "", value or "-")
+
+
 def _outreach_target(signal) -> str | int | None:
     username = getattr(signal, "author_username", None)
     if username:
@@ -1162,6 +1186,7 @@ def format_sales_lead_card(idx: int, signal) -> str:
         f"<b>Профиль/username:</b> {profile_line}\n"
         f"<b>Чат:</b> {chat_line}\n"
         f"<b>Актуальность:</b> {escape_html(actual_label)}\n"
+        f"<b>Сценарий:</b> {escape_html(_ru_outreach_segment(getattr(signal, 'outreach_segment', None)))} / {escape_html(_ru_outreach_stage(getattr(signal, 'outreach_stage', None)))}\n"
         f"<b>Сообщение:</b> {escape_html(context)}\n"
         f"<b>Контекст:</b> {escape_html(_trim_text(getattr(signal, 'why_actionable', None) or getattr(signal, 'conversation_type', None) or '-', 160))}\n"
         f"<b>Гипотеза боли:</b> {escape_html(pain_hypothesis)}\n"
@@ -1193,6 +1218,7 @@ def format_signal_card(idx: int, signal) -> str:
         f"<b>Lead score:</b> {primary_score} | <b>Signal score:</b> {signal.signal_score}\n"
         f"<b>Контакт:</b> {escape_html(getattr(signal, 'contact_hint', None) or signal.author_username or '-') }\n"
         f"<b>Компания/сайт:</b> {escape_html(company)}\n"
+        f"<b>Сценарий:</b> {escape_html(_ru_outreach_segment(getattr(signal, 'outreach_segment', None)))} / {escape_html(_ru_outreach_stage(getattr(signal, 'outreach_stage', None)))}\n"
         f"<b>Почему в выдаче:</b> {escape_html(why)}\n"
         f"<b>Фрагмент:</b> {escape_html(_trim_text(signal.text_excerpt or '-', 240))}\n"
         f"<b>Заход:</b> {escape_html(_trim_text(signal.recommended_opener or '-', 180))}\n"

@@ -613,6 +613,63 @@ def build_recommended_opener(text_l: str, message_type: str, lead_fit: str) -> s
     return "Нужен ручной разбор цепочки сообщений."
 
 
+def classify_outreach_segment(text_l: str, lead_fit: str, message_type: str) -> dict:
+    if lead_fit in {"noise", "contractor"}:
+        return {
+            "outreach_segment": "ignore",
+            "outreach_stage": "ignore",
+            "outreach_angle": "Не использовать для outreach.",
+        }
+
+    if any(x in text_l for x in ["ищем подрядчика", "ищем агентство", "нужен подрядчик", "нужен маркетолог", "кто поможет", "кого посоветуете"]):
+        return {
+            "outreach_segment": "vendor_search",
+            "outreach_stage": "solution_search",
+            "outreach_angle": "Человек уже ищет решение. Можно заходить через короткую квалификацию и предложение созвона/разбора.",
+        }
+
+    if any(x in text_l for x in ["яндекс кит", "яндекс.кит", "прямой канал", "свой магазин", "свой сайт", "внешний трафик", "альтернатива маркетплейсу"]):
+        return {
+            "outreach_segment": "direct_channel_interest",
+            "outreach_stage": "solution_search",
+            "outreach_angle": "Есть интерес к каналу вне MP. Заходить через аккуратный тест сайта/Кита/Директа без отказа от WB/Ozon.",
+        }
+
+    if any(x in text_l for x in ["возврат", "пвз", "невыкуп", "не выкуп", "срок хранения", "логистика", "застрял", "груз", "границе"]):
+        return {
+            "outreach_segment": "mp_operations",
+            "outreach_stage": "awareness",
+            "outreach_angle": "Сначала дать экспертную пользу по конкретной операционной проблеме. Не продавать direct в первом касании.",
+        }
+
+    if any(x in text_l for x in ["упд", "усн", "расход", "отчет реализации", "фин отчет", "документ", "налог"]):
+        return {
+            "outreach_segment": "mp_accounting",
+            "outreach_stage": "awareness",
+            "outreach_angle": "Сначала помочь разобраться с отчетами/расходами. Продавать рано, задача - доверие и диалог.",
+        }
+
+    if any(x in text_l for x in ["карточк", "первые продажи", "не берут", "нет продаж", "себестоимости", "скидк", "позиции", "трафик есть"]):
+        return {
+            "outreach_segment": "mp_demand",
+            "outreach_stage": "awareness",
+            "outreach_angle": "Сначала разобрать спрос, карточку и первые поведенческие сигналы. Потом можно перейти к внешнему спросу.",
+        }
+
+    if any(x in text_l for x in ["комисси", "марж", "штраф", "внутренняя реклама", "цена клика", "ставки", "не сходится", "не окупается"]):
+        return {
+            "outreach_segment": "mp_unit_economics",
+            "outreach_stage": "problem_aware",
+            "outreach_angle": "Заходить через разбор экономики: комиссии, логистика, возвраты, реклама, скидки. Direct/Кит - только как следующий шаг.",
+        }
+
+    return {
+        "outreach_segment": "mp_general_pain",
+        "outreach_stage": "awareness",
+        "outreach_angle": "Начинать с уточнения контекста и короткой пользы по проблеме, без раннего оффера.",
+    }
+
+
 def _build_lead_fit(
     *,
     message_type: str,
@@ -900,6 +957,7 @@ def classify_signal(
         editorial_penalty=editorial_penalty,
     )
     is_actionable = lead_fit == "target"
+    outreach = classify_outreach_segment(full_l, lead_fit, message_type)
 
     reasons = []
     if reply_depth >= 1:
@@ -963,4 +1021,5 @@ def classify_signal(
         "icp_detected": ",".join(icp_detected),
         "why_actionable": why,
         "recommended_opener": build_recommended_opener(full_l, message_type, lead_fit),
+        **outreach,
     }

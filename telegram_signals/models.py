@@ -68,6 +68,9 @@ class TelegramSignal(Base):
     company_hint = Column(String, nullable=True)
     website_hint = Column(String, nullable=True)
     contact_hint = Column(String, nullable=True)
+    outreach_segment = Column(String, nullable=True)
+    outreach_stage = Column(String, nullable=True)
+    outreach_angle = Column(Text, nullable=True)
 
     status = Column(String, nullable=False, default="new")
     review_status = Column(String, nullable=False, default="unchecked")
