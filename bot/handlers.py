@@ -329,7 +329,7 @@ async def find_companies(callback: CallbackQuery):
 async def tg_signals_menu_handler(callback: CallbackQuery):
     await _send_or_edit(
         callback,
-        "<b>Telegram Signal Miner</b>\n\nСценарий простой: собрать свежие боли селлеров, затем разобрать очередь лидов.",
+        "<b>Telegram Signal Miner</b>\n\nСобираем боли селлеров и производителей, где можно вести в прямой канал: свой сайт или Яндекс.Кит + Директ.",
         reply_markup=telegram_signals_menu(),
     )
     await callback.answer()
@@ -343,11 +343,11 @@ async def tg_collect(callback: CallbackQuery):
         if segment == "all"
         else [segment]
     )
-    segment_ru = "WB/Ozon + direct + производители" if segment == "all" else _ru_segment(segment)
+    segment_ru = "WB/Ozon + сайт/Кит + производители" if segment == "all" else _ru_segment(segment)
     await callback.answer("Запускаю поиск…")
     await callback.message.answer(
         f"Запускаю поиск Telegram-сигналов: <b>{escape_html(segment_ru)}</b>\n"
-        "Ищу живые вопросы, операционные боли и признаки seller/brand.",
+        "Ищу живые вопросы, операционные боли и признаки seller/brand: комиссии, возвраты, внешний трафик, прямой канал.",
         parse_mode="HTML",
     )
     totals = {"created": 0, "updated": 0, "scanned_chats": 0, "scanned_messages": 0, "kept_signals": 0}
@@ -975,7 +975,7 @@ def _ru_segment(value: str | None) -> str:
     mapping = {
         "all": "Все",
         "ecom_marketplace_pain": "WB / Ozon боль",
-        "ecom_direct_growth": "Свой сайт / Direct",
+        "ecom_direct_growth": "Свой сайт / Кит / Direct",
         "manufacturer_secondary": "Производители",
     }
     return mapping.get(value or "", value or "-")

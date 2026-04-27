@@ -16,7 +16,7 @@ def main_menu() -> InlineKeyboardMarkup:
 def telegram_signals_menu() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(
         inline_keyboard=[
-            [InlineKeyboardButton(text="🔄 Собрать сигналы WB/Ozon", callback_data="tg_collect:all")],
+            [InlineKeyboardButton(text="🔄 Собрать боли WB/Ozon → сайт/Кит", callback_data="tg_collect:all")],
             [
                 InlineKeyboardButton(text="🎯 Писать сейчас", callback_data="tg_targets:0:all"),
                 InlineKeyboardButton(text="🟡 Проверить", callback_data="tg_review:0:all"),
