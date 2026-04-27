@@ -50,6 +50,30 @@ def _build_contact_link(signal) -> str | None:
     return getattr(signal, "chat_url", None)
 
 
+def _build_message_link(signal) -> str | None:
+    message_id = getattr(signal, "message_id", None)
+    if not message_id:
+        return None
+
+    chat_username = getattr(signal, "chat_username", None)
+    if chat_username:
+        return f"https://t.me/{str(chat_username).lstrip('@')}/{message_id}"
+
+    chat_url = getattr(signal, "chat_url", None)
+    if chat_url:
+        return f"{str(chat_url).rstrip('/')}/{message_id}"
+
+    chat_id = str(getattr(signal, "chat_id", None) or "").strip()
+    if not chat_id:
+        return None
+
+    internal_id = chat_id.removeprefix("-100").lstrip("-")
+    if internal_id.isdigit():
+        return f"https://t.me/c/{internal_id}/{message_id}"
+
+    return None
+
+
 def _lead_identity(signal) -> str:
     if getattr(signal, "author_username", None):
         return f"@{str(signal.author_username).lstrip('@')}"
@@ -217,11 +241,14 @@ def sales_lead_keyboard(prefix: str, page: int, total_pages: int, signal, *, ext
             ),
         ])
 
+    open_message = _build_message_link(signal)
     open_chat = getattr(signal, "chat_url", None)
     open_contact = _build_contact_link(signal)
     action_row = []
+    if open_message:
+        action_row.append(InlineKeyboardButton(text="Открыть сообщение", url=open_message))
     if open_chat:
-        action_row.append(InlineKeyboardButton(text="Открыть чат", url=open_chat))
+        action_row.append(InlineKeyboardButton(text="Чат", url=open_chat))
     if open_contact and open_contact != open_chat:
         action_row.append(InlineKeyboardButton(text="Профиль", url=open_contact))
     if action_row:
@@ -365,9 +392,11 @@ async def tg_collect(callback: CallbackQuery):
 
     await callback.message.answer(
         "Поиск завершён.\n"
-        f"Создано: <b>{totals['created']}</b>, обновлено: <b>{totals['updated']}</b>.\n"
+        f"Сырых сигналов: <b>{totals['created']}</b> новых, <b>{totals['updated']}</b> обновлено.\n"
         f"Просмотрено чатов: <b>{totals['scanned_chats']}</b>, сообщений: <b>{totals['scanned_messages']}</b>.\n"
-        f"Сигналов в работу: <b>{totals['kept_signals']}</b>.",
+        f"В очередях сейчас: 🎯 <b>{len(_dedupe_signals_to_leads(get_target_leads(limit=None)))}</b>, "
+        f"🟡 <b>{len(_dedupe_signals_to_leads(get_review_leads(limit=None)))}</b>.\n"
+        f"Сырья после первичного фильтра: <b>{totals['kept_signals']}</b>.",
         parse_mode="HTML",
         reply_markup=telegram_signals_menu(),
     )
@@ -839,6 +868,7 @@ def format_sales_lead_card(idx: int, signal) -> str:
 
     profile_url = _build_contact_link(signal)
     chat_url = getattr(signal, "chat_url", None)
+    message_url = _build_message_link(signal)
 
     message_date = getattr(signal, "message_date", None)
     actual_label = "-"
@@ -850,7 +880,9 @@ def format_sales_lead_card(idx: int, signal) -> str:
         who_line = f'<a href="{escape_html(profile_url)}">{escape_html(username_to_write)}</a>'
 
     chat_line = escape_html(chat_name)
-    if chat_url:
+    if message_url:
+        chat_line = f'<a href="{escape_html(message_url)}">{escape_html(chat_name)}</a>'
+    elif chat_url:
         chat_line = f'<a href="{escape_html(chat_url)}">{escape_html(chat_name)}</a>'
 
     profile_line = who_line if profile_url else escape_html(username_to_write)
