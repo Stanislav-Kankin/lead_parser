@@ -63,9 +63,11 @@ def _build_lead_summary(signal) -> str:
     icp = (getattr(signal, "icp_detected", None) or "").strip()
     bits = []
     if pain:
-        bits.append(pain)
+        pain_items = [item.strip() for item in pain.split(",") if item.strip()]
+        bits.append(", ".join(pain_items[:4]))
     if icp:
-        bits.append(icp)
+        icp_items = [item.strip() for item in icp.split(",") if item.strip()]
+        bits.append(", ".join(icp_items[:3]))
     if bits:
         return "; ".join(bits)
     why = (getattr(signal, "why_actionable", None) or "").strip()
@@ -150,7 +152,7 @@ def _get_sales_view_payload(view: str, segment_filter: str | None):
     if view == "tg_targets":
         return "🎯 Писать сейчас", _dedupe_signals_to_leads(get_target_leads(segment=segment_filter, limit=None)), segment_label
     if view == "tg_review":
-        return "🟡 Проверить", _dedupe_signals_to_leads(get_review_leads(segment=segment_filter, limit=None)), segment_label
+        return "🟡 Проверить компанию", _dedupe_signals_to_leads(get_review_leads(segment=segment_filter, limit=None)), segment_label
     if view == "tg_ok":
         return "✅ ОК лиды", _dedupe_signals_to_leads(get_reviewed_leads("ok", segment=segment_filter, limit=None)), segment_label
     if view == "tg_not_ok":
@@ -327,7 +329,7 @@ async def find_companies(callback: CallbackQuery):
 async def tg_signals_menu_handler(callback: CallbackQuery):
     await _send_or_edit(
         callback,
-        "<b>Telegram Signal Miner</b>\n\nВыбери сегмент для поиска сигналов или один из режимов просмотра.",
+        "<b>Telegram Signal Miner</b>\n\nСценарий простой: собрать свежие боли селлеров, затем разобрать очередь лидов.",
         reply_markup=telegram_signals_menu(),
     )
     await callback.answer()
@@ -336,14 +338,24 @@ async def tg_signals_menu_handler(callback: CallbackQuery):
 @router.callback_query(F.data.startswith("tg_collect:"))
 async def tg_collect(callback: CallbackQuery):
     segment = (callback.data or "").split(":", 1)[1]
-    segment_ru = _ru_segment(segment)
+    segments = (
+        ["ecom_marketplace_pain", "ecom_direct_growth", "manufacturer_secondary"]
+        if segment == "all"
+        else [segment]
+    )
+    segment_ru = "WB/Ozon + direct + производители" if segment == "all" else _ru_segment(segment)
     await callback.answer("Запускаю поиск…")
     await callback.message.answer(
-        f"Запускаю поиск Telegram-сигналов: <b>{escape_html(segment_ru)}</b>",
+        f"Запускаю поиск Telegram-сигналов: <b>{escape_html(segment_ru)}</b>\n"
+        "Ищу живые вопросы, операционные боли и признаки seller/brand.",
         parse_mode="HTML",
     )
+    totals = {"created": 0, "updated": 0, "scanned_chats": 0, "scanned_messages": 0, "kept_signals": 0}
     try:
-        result = await collect_signals(segment)
+        for current_segment in segments:
+            result = await collect_signals(current_segment)
+            for key in totals:
+                totals[key] += int(result.get(key, 0) or 0)
     except Exception as e:
         await callback.message.answer(
             f"Ошибка Telegram-поиска: {escape_html(str(e))}",
@@ -352,7 +364,10 @@ async def tg_collect(callback: CallbackQuery):
         return
 
     await callback.message.answer(
-        f"Поиск завершён. Создано: <b>{result['created']}</b>, обновлено: <b>{result['updated']}</b>.",
+        "Поиск завершён.\n"
+        f"Создано: <b>{totals['created']}</b>, обновлено: <b>{totals['updated']}</b>.\n"
+        f"Просмотрено чатов: <b>{totals['scanned_chats']}</b>, сообщений: <b>{totals['scanned_messages']}</b>.\n"
+        f"Сигналов в работу: <b>{totals['kept_signals']}</b>.",
         parse_mode="HTML",
         reply_markup=telegram_signals_menu(),
     )
@@ -365,6 +380,18 @@ async def tg_list(callback: CallbackQuery):
     if not items:
         await _send_or_edit(callback, "Пока Telegram-сигналов нет. Сначала запусти поиск по одному из сегментов.", reply_markup=telegram_signals_menu())
         await callback.answer()
+        return
+
+    total_pages = max(1, math.ceil(len(items) / PAGE_SIZE))
+    page = min(page, total_pages - 1)
+    text = _build_signal_page("Все Telegram-сигналы", items, page, total_pages, _ru_segment(segment_filter or "all"))
+
+    await _send_or_edit(
+        callback,
+        text,
+        reply_markup=pagination_keyboard("tg_list", page, total_pages, extra=(segment_filter or "all")),
+    )
+    await callback.answer()
 
 
 @router.callback_query(F.data.startswith("tg_targets:"))
