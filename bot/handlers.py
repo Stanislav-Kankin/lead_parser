@@ -464,7 +464,7 @@ async def tg_collect(callback: CallbackQuery):
 
     await callback.message.answer(
         "Поиск завершён.\n"
-        f"Окно свежести: <b>48 часов</b>.\n"
+        f"Окно свежести: <b>96 часов</b>.\n"
         f"Сырых сигналов: <b>{totals['created']}</b> новых, <b>{totals['updated']}</b> обновлено.\n"
         f"Просмотрено чатов: <b>{totals['scanned_chats']}</b>, свежих сообщений: <b>{totals['scanned_messages']}</b>.\n"
         f"В очередях сейчас: 🎯 <b>{len(_dedupe_signals_to_leads(get_target_leads(limit=None)))}</b>, "
@@ -596,7 +596,7 @@ async def draft_outreach_message(callback: CallbackQuery):
     text = (
         "<b>Скопируй текст и отправь вручную</b>\n"
         f"<b>Кому:</b> {escape_html(str(target))}\n\n"
-        f"<pre>{escape_html(draft)}</pre>"
+        f"<code>{escape_html(draft)}</code>"
     )
     rows = []
     if profile_url:

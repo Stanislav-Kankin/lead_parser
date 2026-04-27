@@ -150,7 +150,7 @@ async def collect_signals(
     segment: str,
     limit_chats: int = 12,
     limit_messages_per_chat: int = 80,
-    max_age_hours: int = 48,
+    max_age_hours: int = 96,
 ) -> dict:
     if segment not in CHAT_DISCOVERY_KEYWORDS:
         raise ValueError(f"Неизвестный сегмент: {segment}")
