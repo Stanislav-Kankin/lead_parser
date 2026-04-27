@@ -50,9 +50,6 @@ def _build_contact_link(signal) -> str | None:
     if author_username:
         username = str(author_username).lstrip("@")
         return f"https://t.me/{username}"
-    author_id = str(getattr(signal, "author_id", None) or "").strip()
-    if author_id and author_id.lstrip("-").isdigit():
-        return f"tg://user?id={author_id}"
     return None
 
 
