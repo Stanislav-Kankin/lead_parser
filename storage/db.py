@@ -1,10 +1,12 @@
+import os
+
 from sqlalchemy import create_engine, inspect, text
 from sqlalchemy.orm import sessionmaker
 
 from models.lead import Base
 from telegram_signals.models import TelegramSignal  # noqa: F401
 
-DATABASE_URL = "sqlite:///./leads.db"
+DATABASE_URL = os.getenv("DATABASE_URL", "sqlite:///./leads.db")
 
 engine = create_engine(
     DATABASE_URL,

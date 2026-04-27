@@ -5,8 +5,10 @@ services:
     build: .
     env_file:
       - .env
+    environment:
+      - DATABASE_URL=sqlite:////app/data/leads.db
     volumes:
-      - ./leads.db:/app/leads.db
+      - ./data:/app/data
       - ./lead_signal_session.session:/app/lead_signal_session.session
       - ./exports:/app/exports
     restart: unless-stopped
@@ -14,9 +16,11 @@ services:
     build: .
     env_file:
       - .env
+    environment:
+      - DATABASE_URL=sqlite:////app/data/leads.db
     command: uvicorn app.main:app --host 0.0.0.0 --port 8000
     volumes:
-      - ./leads.db:/app/leads.db
+      - ./data:/app/data
       - ./exports:/app/exports
     ports:
       - "127.0.0.1:8011:8000"
