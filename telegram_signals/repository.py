@@ -30,6 +30,45 @@ def _exclude_obvious_ads(stmt):
     return stmt
 
 
+def _author_identity_filter(item: dict):
+    author_id = str(item.get("author_id") or "").strip()
+    author_username = str(item.get("author_username") or "").strip()
+    clauses = []
+    if author_id:
+        clauses.append(TelegramSignal.author_id == author_id)
+    if author_username:
+        clauses.append(TelegramSignal.author_username.ilike(author_username))
+    if not clauses:
+        return None
+    return or_(*clauses)
+
+
+def _apply_author_history(session, item: dict) -> None:
+    identity_filter = _author_identity_filter(item)
+    if identity_filter is None:
+        return
+
+    contacted = session.execute(
+        select(TelegramSignal.id).where(
+            identity_filter,
+            TelegramSignal.status == "contacted",
+        ).limit(1)
+    ).first()
+    if contacted:
+        item["status"] = "contacted"
+        item["review_status"] = "ok"
+        return
+
+    not_ok = session.execute(
+        select(TelegramSignal.id).where(
+            identity_filter,
+            TelegramSignal.review_status == "not_ok",
+        ).limit(1)
+    ).first()
+    if not_ok:
+        item["review_status"] = "not_ok"
+
+
 def save_signals(items: Iterable[dict]) -> dict:
     created = 0
     updated = 0
@@ -50,6 +89,7 @@ def save_signals(items: Iterable[dict]) -> dict:
                     setattr(exists, k, v)
                 updated += 1
             else:
+                _apply_author_history(session, item)
                 session.add(TelegramSignal(**item))
                 created += 1
         session.commit()
