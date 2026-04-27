@@ -45,6 +45,8 @@ def save_signals(items: Iterable[dict]) -> dict:
 
             if exists:
                 for k, v in item.items():
+                    if k in {"review_status", "reviewed_at", "status"}:
+                        continue
                     setattr(exists, k, v)
                 updated += 1
             else:
@@ -66,6 +68,8 @@ def get_signals(
     lead_fit_in: list[str] | None = None,
     review_status: str | None = None,
     review_status_in: list[str] | None = None,
+    status: str | None = None,
+    status_not: str | None = None,
 ) -> list[TelegramSignal]:
     with SessionLocal() as session:
         stmt = select(TelegramSignal)
@@ -85,6 +89,10 @@ def get_signals(
             stmt = stmt.where(TelegramSignal.review_status == review_status)
         if review_status_in:
             stmt = stmt.where(TelegramSignal.review_status.in_(review_status_in))
+        if status:
+            stmt = stmt.where(TelegramSignal.status == status)
+        if status_not:
+            stmt = stmt.where(TelegramSignal.status != status_not)
         if only_actionable or lead_fit or lead_fit_in or review_status or review_status_in:
             stmt = _exclude_obvious_ads(stmt)
 
@@ -169,7 +177,11 @@ def get_market_intelligence(segment: str | None = None, limit: int | None = None
 
 
 def get_reviewed_leads(review_status: str, segment: str | None = None, limit: int | None = None) -> list[TelegramSignal]:
-    return get_signals(segment=segment, limit=limit, lead_fit_in=["target", "review"], review_status=review_status)
+    return get_signals(segment=segment, limit=limit, lead_fit_in=["target", "review"], review_status=review_status, status_not="contacted")
+
+
+def get_contacted_leads(segment: str | None = None, limit: int | None = None) -> list[TelegramSignal]:
+    return get_signals(segment=segment, limit=limit, lead_fit_in=["target", "review"], review_status="ok", status="contacted")
 
 
 def get_signal_by_id(signal_id: int) -> TelegramSignal | None:
@@ -184,5 +196,15 @@ def set_signal_review_status(signal_id: int, review_status: str) -> bool:
             return False
         item.review_status = review_status
         item.reviewed_at = datetime.utcnow()
+        session.commit()
+        return True
+
+
+def set_signal_status(signal_id: int, status: str) -> bool:
+    with SessionLocal() as session:
+        item = session.get(TelegramSignal, signal_id)
+        if item is None:
+            return False
+        item.status = status
         session.commit()
         return True

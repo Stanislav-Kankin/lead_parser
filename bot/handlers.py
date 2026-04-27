@@ -16,6 +16,7 @@ from sources.query_builder import build_queries
 from storage.lead_repository import get_last_leads, save_leads
 from telegram_signals.exporter import export_signals_to_xlsx
 from telegram_signals.repository import (
+    get_contacted_leads,
     get_signal_by_id,
     get_business_like_messages,
     get_discussion_leads,
@@ -25,6 +26,7 @@ from telegram_signals.repository import (
     get_signals,
     get_target_leads,
     set_signal_review_status,
+    set_signal_status,
 )
 from telegram_signals.client import get_client
 from telegram_signals.service import collect_signals
@@ -88,33 +90,31 @@ def _build_outreach_text(signal) -> str:
     haystack = f"{message_text}\n{pain}"
 
     if any(token in haystack for token in ["карточк", "первые продажи", "не берут", "себестоимости", "нет продаж"]):
-        hook = (
-            "увидел ваш вопрос про первые продажи карточки и ситуацию, когда без сильной скидки товар почти не едет."
-        )
+        hook = "увидел ваше сообщение про запуск новой карточки и первые продажи."
         bridge = (
-            "Похоже, проблема понятная: внутри маркетплейса запуск нового товара всё чаще становится дорогим и непредсказуемым."
+            "Понимаю боль: когда товар начинает двигаться только через сильную скидку, экономика быстро становится неприятной."
         )
     elif any(token in haystack for token in ["возврат", "пвз", "комисси", "марж", "штраф"]):
-        hook = "увидел ваш вопрос про экономику на маркетплейсах."
+        hook = "увидел ваше сообщение про экономику на маркетплейсах."
         bridge = (
-            "Похоже, боль понятная: комиссии, возвраты и внутренняя реклама начинают съедать то, что должно оставаться в марже."
+            "Понимаю боль: комиссии, возвраты и внутренняя реклама часто съедают то, что должно оставаться в марже."
         )
     elif any(token in haystack for token in ["клиентск", "повторн", "прямой канал", "яндекс.кит", "яндекс кит", "свой магазин"]):
-        hook = "увидел ваш вопрос про прямой канал и свою клиентскую базу."
+        hook = "увидел ваше сообщение про прямой канал и свою клиентскую базу."
         bridge = (
-            "Это как раз та ситуация, где обычно смотрят не на уход с маркетплейсов, а на аккуратный допканал рядом с ними."
+            "Это как раз тот случай, где можно смотреть не на уход с маркетплейсов, а на аккуратный допканал рядом с ними."
         )
     else:
-        hook = "увидел ваш вопрос в чате селлеров."
+        hook = "увидел ваше сообщение в чате селлеров."
         bridge = (
-            "По описанию похоже, что вопрос уже не только технический, а про экономику продаж и зависимость от площадки."
+            "По описанию похоже, что вопрос не только технический, а ещё и про экономику продаж на площадке."
         )
 
     return (
         f"{hello}\n\n"
         f"{hook} В чате «{chat_title}».\n\n"
         f"{bridge}\n\n"
-        "Если интересно, можем коротко обсудить варианты: где сейчас теряется экономика и есть ли смысл тестировать прямой канал без отказа от WB/Ozon."
+        "Если интересно, можем коротко обсудить, какие варианты есть и стоит ли тестировать прямой канал без отказа от WB/Ozon."
     )
 
 
@@ -126,6 +126,16 @@ def _outreach_target(signal) -> str | int | None:
     if author_id and author_id.lstrip("-").isdigit():
         return int(author_id)
     return None
+
+
+def _outreach_target_label(signal) -> str:
+    username = getattr(signal, "author_username", None)
+    if username:
+        return f"@{str(username).lstrip('@')}"
+    author_name = (getattr(signal, "author_name", None) or "").strip()
+    if author_name:
+        return f"{author_name} (нет username, открыть личку нельзя)"
+    return "Автор без username"
 
 
 def _lead_identity(signal) -> str:
@@ -233,6 +243,8 @@ def _get_sales_view_payload(view: str, segment_filter: str | None):
         return "🟡 Проверить компанию", _dedupe_signals_to_leads(get_review_leads(segment=segment_filter, limit=None)), segment_label
     if view == "tg_ok":
         return "✅ ОК лиды", _dedupe_signals_to_leads(get_reviewed_leads("ok", segment=segment_filter, limit=None)), segment_label
+    if view == "tg_contacted":
+        return "📬 Связались", _dedupe_signals_to_leads(get_contacted_leads(segment=segment_filter, limit=None)), segment_label
     if view == "tg_not_ok":
         return "❌ Не ОК лиды", _dedupe_signals_to_leads(get_reviewed_leads("not_ok", segment=segment_filter, limit=None)), segment_label
     return "Лиды", [], segment_label
@@ -241,8 +253,9 @@ def _get_sales_view_payload(view: str, segment_filter: str | None):
 def _view_empty_text(view: str) -> str:
     mapping = {
         "tg_targets": "Пока авто-target пустой. Рабочий путь: открыть Проверить, отметить ОК и писать из ОК.",
-        "tg_review": "Пока нет свежих лидов за 48 часов. Нажми «Собрать боли WB/Ozon → сайт/Кит».",
+        "tg_review": "Пока нет свежих лидов за 96 часов. Нажми «Собрать боли WB/Ozon → сайт/Кит».",
         "tg_ok": "Пока нет ОК-лидов. Сначала отметь подходящих людей в «Проверить».",
+        "tg_contacted": "Пока нет лидов, с которыми уже связались.",
         "tg_not_ok": "Пока нет лидов, которые ты отметил как не ОК.",
     }
     return mapping.get(view, "Пока данных нет.")
@@ -285,9 +298,10 @@ def sales_lead_keyboard(prefix: str, page: int, total_pages: int, signal, *, ext
 
     if signal_id is not None and prefix in {"tg_targets", "tg_review", "tg_ok", "tg_not_ok"}:
         if _outreach_target(signal):
+            draft_button_text = "✉️ Написать лиду по черновику" if _build_contact_link(signal) else "📝 Подготовить черновик"
             rows.append([
                 InlineKeyboardButton(
-                    text="✉️ Написать лиду по черновику",
+                    text=draft_button_text,
                     callback_data=f"draft_msg:{signal_id}:{prefix}:{page}:{segment}",
                 )
             ])
@@ -525,6 +539,13 @@ async def tg_not_ok(callback: CallbackQuery):
     await callback.answer()
 
 
+@router.callback_query(F.data.startswith("tg_contacted:"))
+async def tg_contacted(callback: CallbackQuery):
+    segment_filter, page = _parse_segment_page(callback.data or "")
+    await _render_sales_view(callback, "tg_contacted", page, segment_filter)
+    await callback.answer()
+
+
 @router.callback_query(F.data.startswith("jump:"))
 async def jump_to_page_prompt(callback: CallbackQuery):
     parts = (callback.data or "").split(":", 2)
@@ -581,7 +602,7 @@ async def draft_outreach_message(callback: CallbackQuery):
 
     target = _outreach_target(signal)
     if not target:
-        await callback.answer("У автора нет username для личного сообщения", show_alert=True)
+        await callback.answer("Не удалось определить автора", show_alert=True)
         return
 
     draft = _build_outreach_text(signal)
@@ -594,17 +615,63 @@ async def draft_outreach_message(callback: CallbackQuery):
     }
     profile_url = _build_contact_link(signal)
     message_url = _build_message_link(signal)
-    text = "<b>Черновик ниже отдельным сообщением.</b>\n" f"<b>Кому:</b> {escape_html(str(target))}"
+    text = (
+        "<b>Черновик для ручной отправки</b>\n"
+        f"<b>Кому:</b> {escape_html(_outreach_target_label(signal))}\n\n"
+        f"{escape_html(draft)}"
+    )
     rows = []
     if profile_url:
         rows.append([InlineKeyboardButton(text="✉️ Открыть личку", url=profile_url)])
     elif message_url:
         rows.append([InlineKeyboardButton(text="Открыть сообщение", url=message_url)])
+    rows.append([
+        InlineKeyboardButton(text="✅ Отправил", callback_data=f"outreach_done:{signal_id}:{view}:{page}:{segment}"),
+        InlineKeyboardButton(text="⏭️ Пропустить", callback_data=f"outreach_skip:{signal_id}:{view}:{page}:{segment}"),
+    ])
     rows.append([InlineKeyboardButton(text="⬅️ Назад к лиду", callback_data=f"{view}:{page}:{segment}")])
     keyboard = InlineKeyboardMarkup(inline_keyboard=rows)
     await _send_or_edit(callback, text, reply_markup=keyboard)
-    await callback.message.answer(draft, disable_web_page_preview=True)
     await callback.answer()
+
+
+@router.callback_query(F.data.startswith("outreach_done:"))
+async def outreach_done(callback: CallbackQuery):
+    parts = (callback.data or "").split(":")
+    if len(parts) != 5:
+        await callback.answer("Не удалось обработать действие", show_alert=True)
+        return
+    _, signal_id_raw, view, page_raw, segment = parts
+    try:
+        signal_id = int(signal_id_raw)
+        page = int(page_raw)
+    except Exception:
+        await callback.answer("Некорректные данные", show_alert=True)
+        return
+
+    if not set_signal_status(signal_id, "contacted"):
+        await callback.answer("Лид не найден", show_alert=True)
+        return
+
+    segment_filter = None if segment == "all" else segment
+    await callback.answer("Пометил: связались")
+    await _render_sales_view(callback, view, page, segment_filter)
+
+
+@router.callback_query(F.data.startswith("outreach_skip:"))
+async def outreach_skip(callback: CallbackQuery):
+    parts = (callback.data or "").split(":")
+    if len(parts) != 5:
+        await callback.answer()
+        return
+    _, _signal_id_raw, view, page_raw, segment = parts
+    try:
+        page = int(page_raw)
+    except Exception:
+        page = 0
+    segment_filter = None if segment == "all" else segment
+    await callback.answer("Пропустил")
+    await _render_sales_view(callback, view, page, segment_filter)
 
 
 @router.callback_query(F.data.startswith("send_msg:"))

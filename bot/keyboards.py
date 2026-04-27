@@ -44,6 +44,7 @@ def telegram_signals_debug_menu() -> InlineKeyboardMarkup:
                 InlineKeyboardButton(text="📤 Excel ОК", callback_data="tg_export:ok"),
                 InlineKeyboardButton(text="📤 Excel не ОК", callback_data="tg_export:not_ok"),
             ],
+            [InlineKeyboardButton(text="📬 Связались", callback_data="tg_contacted:0:all")],
             [InlineKeyboardButton(text="📤 Excel рынок", callback_data="tg_export:market")],
             [InlineKeyboardButton(text="⬅️ Назад", callback_data="tg_signals_menu")],
         ]
