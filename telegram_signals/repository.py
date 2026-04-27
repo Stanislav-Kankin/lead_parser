@@ -10,6 +10,26 @@ from storage.db import SessionLocal
 from .models import TelegramSignal
 
 
+AD_TEXT_EXCLUDE_PATTERNS = (
+    "наклейки-замки",
+    "на ваши зип-пакеты",
+    "ваш идеальный помощник",
+    "нужен товар с рынка",
+    "мы выкупим",
+    "упакуем",
+    "доставим в любую точку",
+    "этапы сотрудничества",
+    "поиск одежды по фото",
+    "показ товаров по видеосвязи",
+)
+
+
+def _exclude_obvious_ads(stmt):
+    for pattern in AD_TEXT_EXCLUDE_PATTERNS:
+        stmt = stmt.where(~TelegramSignal.message_text.ilike(f"%{pattern}%"))
+    return stmt
+
+
 def save_signals(items: Iterable[dict]) -> dict:
     created = 0
     updated = 0
@@ -65,6 +85,8 @@ def get_signals(
             stmt = stmt.where(TelegramSignal.review_status == review_status)
         if review_status_in:
             stmt = stmt.where(TelegramSignal.review_status.in_(review_status_in))
+        if only_actionable or lead_fit or lead_fit_in or review_status or review_status_in:
+            stmt = _exclude_obvious_ads(stmt)
 
         level_order = case(
             (TelegramSignal.signal_level == "high", 3),
