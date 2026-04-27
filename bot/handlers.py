@@ -16,6 +16,7 @@ from sources.query_builder import build_queries
 from storage.lead_repository import get_last_leads, save_leads
 from telegram_signals.exporter import export_signals_to_xlsx
 from telegram_signals.repository import (
+    get_signal_by_id,
     get_business_like_messages,
     get_discussion_leads,
     get_market_intelligence,
@@ -25,6 +26,7 @@ from telegram_signals.repository import (
     get_target_leads,
     set_signal_review_status,
 )
+from telegram_signals.client import get_client
 from telegram_signals.service import collect_signals
 from utils.domain_normalizer import normalize_domain
 
@@ -33,6 +35,7 @@ SEARCH_RESULTS_CACHE: dict[int, list[dict]] = {}
 PAGE_JUMP_STATE: dict[int, dict] = {}
 
 TG_MESSAGE_LIMIT = 3900
+OUTREACH_DRAFT_CACHE: dict[int, dict] = {}
 
 
 def _safe_int(value: object, default: int = 0) -> int:
@@ -71,6 +74,55 @@ def _build_message_link(signal) -> str | None:
     if internal_id.isdigit():
         return f"https://t.me/c/{internal_id}/{message_id}"
 
+    return None
+
+
+def _build_outreach_text(signal) -> str:
+    name = (getattr(signal, "author_name", None) or "").strip()
+    first_name = name.split()[0] if name and name.lower() not in {"-", "unknown"} else ""
+    hello = f"{first_name}, добрый день!" if first_name else "Добрый день!"
+
+    message_text = (getattr(signal, "message_text", None) or "").lower()
+    pain = _build_lead_summary(signal).lower()
+    haystack = f"{message_text}\n{pain}"
+
+    if any(token in haystack for token in ["карточк", "первые продажи", "не берут", "себестоимости", "нет продаж"]):
+        hook = (
+            "увидел ваш вопрос про первые продажи карточки и ситуацию, когда без сильной скидки товар не начинает ехать."
+        )
+        hypothesis = (
+            "У селлеров это часто упирается не только в карточку, а в отсутствие внешнего спроса: маркетплейс даёт трафик дорого, "
+            "а своего канала прогрева пока нет."
+        )
+    elif any(token in haystack for token in ["возврат", "пвз", "комисси", "марж", "штраф"]):
+        hook = "увидел ваш вопрос про экономику на маркетплейсах."
+        hypothesis = (
+            "Когда комиссии, возвраты и внутренняя реклама съедают маржу, обычно полезно проверить прямой канал параллельно WB/Ozon, "
+            "а не пытаться всё добить внутри площадки."
+        )
+    elif any(token in haystack for token in ["клиентск", "повторн", "прямой канал", "яндекс.кит", "яндекс кит", "свой магазин"]):
+        hook = "увидел ваш вопрос про прямой канал и свою клиентскую базу."
+        hypothesis = (
+            "Здесь логика как раз в том, чтобы не уходить с маркетплейсов, а добавить параллельный магазин/Яндекс.Кит и проверить спрос через Директ."
+        )
+    else:
+        hook = "увидел ваш вопрос в чате селлеров."
+        hypothesis = (
+            "Похоже, там может быть гипотеза про прямой канал продаж: сайт или Яндекс.Кит + Директ параллельно маркетплейсам."
+        )
+
+    return (
+        f"{hello}\n\n"
+        f"{hook}\n\n"
+        f"{hypothesis}\n\n"
+        "Могу коротко накидать 2-3 гипотезы, где у вас может теряться экономика и есть ли смысл тестировать прямой канал без отказа от маркетплейсов."
+    )
+
+
+def _outreach_target(signal) -> str | None:
+    username = getattr(signal, "author_username", None)
+    if username:
+        return f"@{str(username).lstrip('@')}"
     return None
 
 
@@ -230,6 +282,13 @@ def sales_lead_keyboard(prefix: str, page: int, total_pages: int, signal, *, ext
     ])
 
     if signal_id is not None and prefix in {"tg_targets", "tg_review", "tg_ok", "tg_not_ok"}:
+        if _outreach_target(signal):
+            rows.append([
+                InlineKeyboardButton(
+                    text="✉️ Написать",
+                    callback_data=f"draft_msg:{signal_id}:{prefix}:{page}:{segment}",
+                )
+            ])
         rows.append([
             InlineKeyboardButton(
                 text="✅ ОК лид",
@@ -483,6 +542,96 @@ async def mark_lead(callback: CallbackQuery):
 
     segment_filter = None if segment == "all" else segment
     await callback.answer("Статус обновлён")
+    await _render_sales_view(callback, view, page, segment_filter)
+
+
+@router.callback_query(F.data.startswith("draft_msg:"))
+async def draft_outreach_message(callback: CallbackQuery):
+    parts = (callback.data or "").split(":")
+    if len(parts) != 5:
+        await callback.answer("Не удалось подготовить сообщение", show_alert=True)
+        return
+    _, signal_id_raw, view, page_raw, segment = parts
+    try:
+        signal_id = int(signal_id_raw)
+        page = int(page_raw)
+    except Exception:
+        await callback.answer("Некорректные данные", show_alert=True)
+        return
+
+    signal = get_signal_by_id(signal_id)
+    if signal is None:
+        await callback.answer("Лид не найден", show_alert=True)
+        return
+
+    target = _outreach_target(signal)
+    if not target:
+        await callback.answer("У автора нет username для личного сообщения", show_alert=True)
+        return
+
+    draft = _build_outreach_text(signal)
+    OUTREACH_DRAFT_CACHE[signal_id] = {
+        "text": draft,
+        "target": target,
+        "view": view,
+        "page": page,
+        "segment": segment,
+    }
+    text = (
+        "<b>Черновик сообщения</b>\n"
+        f"<b>Кому:</b> {escape_html(target)}\n\n"
+        f"{escape_html(draft)}"
+    )
+    keyboard = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="📨 Отправить от моего аккаунта", callback_data=f"send_msg:{signal_id}")],
+        [InlineKeyboardButton(text="⬅️ Назад к лиду", callback_data=f"{view}:{page}:{segment}")],
+    ])
+    await _send_or_edit(callback, text, reply_markup=keyboard)
+    await callback.answer()
+
+
+@router.callback_query(F.data.startswith("send_msg:"))
+async def send_outreach_message(callback: CallbackQuery):
+    signal_id_raw = (callback.data or "").split(":", 1)[1]
+    try:
+        signal_id = int(signal_id_raw)
+    except Exception:
+        await callback.answer("Некорректные данные", show_alert=True)
+        return
+
+    draft = OUTREACH_DRAFT_CACHE.get(signal_id)
+    if not draft:
+        await callback.answer("Черновик устарел, открой лид заново", show_alert=True)
+        return
+
+    target = draft["target"]
+    text = draft["text"]
+    await callback.answer("Отправляю…")
+
+    client = get_client()
+    try:
+        await client.connect()
+        if not await client.is_user_authorized():
+            await callback.message.answer("User-сессия Telegram не авторизована. Нужно заново создать lead_signal_session.")
+            return
+        await client.send_message(target, text)
+    except Exception as exc:
+        await callback.message.answer(
+            f"Не удалось отправить сообщение {escape_html(target)}: {escape_html(str(exc))}",
+            parse_mode="HTML",
+        )
+        return
+    finally:
+        await client.disconnect()
+
+    view = draft.get("view") or "tg_review"
+    page = int(draft.get("page") or 0)
+    segment = draft.get("segment") or "all"
+    segment_filter = None if segment == "all" else segment
+    await callback.message.answer(
+        f"Сообщение отправлено: <b>{escape_html(target)}</b>",
+        parse_mode="HTML",
+    )
     await _render_sales_view(callback, view, page, segment_filter)
 
 

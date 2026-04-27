@@ -172,6 +172,11 @@ def get_reviewed_leads(review_status: str, segment: str | None = None, limit: in
     return get_signals(segment=segment, limit=limit, lead_fit_in=["target", "review"], review_status=review_status)
 
 
+def get_signal_by_id(signal_id: int) -> TelegramSignal | None:
+    with SessionLocal() as session:
+        return session.get(TelegramSignal, signal_id)
+
+
 def set_signal_review_status(signal_id: int, review_status: str) -> bool:
     with SessionLocal() as session:
         item = session.get(TelegramSignal, signal_id)
