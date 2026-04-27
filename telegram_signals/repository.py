@@ -257,11 +257,14 @@ def set_signal_review_status(signal_id: int, review_status: str) -> bool:
         return True
 
 
-def set_signal_status(signal_id: int, status: str) -> bool:
+def set_signal_status(signal_id: int, status: str, *, review_status: str | None = None) -> bool:
     with SessionLocal() as session:
         item = session.get(TelegramSignal, signal_id)
         if item is None:
             return False
         item.status = status
+        if review_status:
+            item.review_status = review_status
+            item.reviewed_at = datetime.utcnow()
         session.commit()
         return True

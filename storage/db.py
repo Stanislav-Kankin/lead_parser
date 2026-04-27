@@ -8,6 +8,11 @@ from telegram_signals.models import TelegramSignal  # noqa: F401
 
 DATABASE_URL = os.getenv("DATABASE_URL", "sqlite:///./leads.db")
 
+if DATABASE_URL.startswith("sqlite:///"):
+    db_path = DATABASE_URL.replace("sqlite:///", "", 1)
+    if db_path and db_path != ":memory:":
+        os.makedirs(os.path.dirname(os.path.abspath(db_path)), exist_ok=True)
+
 engine = create_engine(
     DATABASE_URL,
     connect_args={"check_same_thread": False},
@@ -60,6 +65,7 @@ TELEGRAM_SIGNAL_REQUIRED_COLUMNS = {
     "opener_sales": "ALTER TABLE telegram_signals ADD COLUMN opener_sales TEXT",
     "lead_fit": "ALTER TABLE telegram_signals ADD COLUMN lead_fit VARCHAR DEFAULT 'noise'",
     "next_step": "ALTER TABLE telegram_signals ADD COLUMN next_step VARCHAR",
+    "status": "ALTER TABLE telegram_signals ADD COLUMN status VARCHAR DEFAULT 'new'",
     "review_status": "ALTER TABLE telegram_signals ADD COLUMN review_status VARCHAR DEFAULT 'unchecked'",
     "reviewed_at": "ALTER TABLE telegram_signals ADD COLUMN reviewed_at DATETIME",
     "is_actionable": "ALTER TABLE telegram_signals ADD COLUMN is_actionable BOOLEAN DEFAULT 0"
@@ -128,6 +134,7 @@ def _ensure_telegram_signal_columns():
         conn.execute(text("UPDATE telegram_signals SET source_type = COALESCE(source_type, 'chat_message')"))
         conn.execute(text("UPDATE telegram_signals SET is_comment = COALESCE(is_comment, 0)"))
         conn.execute(text("UPDATE telegram_signals SET is_actionable = COALESCE(is_actionable, 0)"))
+        conn.execute(text("UPDATE telegram_signals SET status = COALESCE(status, 'new')"))
         conn.execute(text("UPDATE telegram_signals SET review_status = COALESCE(review_status, 'unchecked')"))
         conn.execute(text("UPDATE telegram_signals SET final_lead_score = COALESCE(final_lead_score, signal_score, 0)"))
         conn.execute(text("UPDATE telegram_signals SET icp_score = COALESCE(icp_score, 0)"))
