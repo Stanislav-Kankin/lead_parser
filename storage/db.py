@@ -46,6 +46,16 @@ TELEGRAM_SIGNAL_REQUIRED_COLUMNS = {
     "outreach_segment": "ALTER TABLE telegram_signals ADD COLUMN outreach_segment VARCHAR",
     "outreach_stage": "ALTER TABLE telegram_signals ADD COLUMN outreach_stage VARCHAR",
     "outreach_angle": "ALTER TABLE telegram_signals ADD COLUMN outreach_angle TEXT",
+    "lead_category": "ALTER TABLE telegram_signals ADD COLUMN lead_category VARCHAR",
+    "lead_score_100": "ALTER TABLE telegram_signals ADD COLUMN lead_score_100 INTEGER DEFAULT 0",
+    "likely_icp": "ALTER TABLE telegram_signals ADD COLUMN likely_icp VARCHAR",
+    "marketplace": "ALTER TABLE telegram_signals ADD COLUMN marketplace VARCHAR",
+    "niche": "ALTER TABLE telegram_signals ADD COLUMN niche VARCHAR",
+    "budget_hint": "ALTER TABLE telegram_signals ADD COLUMN budget_hint VARCHAR",
+    "urgency": "ALTER TABLE telegram_signals ADD COLUMN urgency VARCHAR",
+    "opener_soft": "ALTER TABLE telegram_signals ADD COLUMN opener_soft TEXT",
+    "opener_expert": "ALTER TABLE telegram_signals ADD COLUMN opener_expert TEXT",
+    "opener_sales": "ALTER TABLE telegram_signals ADD COLUMN opener_sales TEXT",
     "lead_fit": "ALTER TABLE telegram_signals ADD COLUMN lead_fit VARCHAR DEFAULT 'noise'",
     "next_step": "ALTER TABLE telegram_signals ADD COLUMN next_step VARCHAR",
     "review_status": "ALTER TABLE telegram_signals ADD COLUMN review_status VARCHAR DEFAULT 'unchecked'",
@@ -130,6 +140,7 @@ def _ensure_telegram_signal_columns():
         conn.execute(text("UPDATE telegram_signals SET is_person_reachable = COALESCE(is_person_reachable, 0)"))
         conn.execute(text("UPDATE telegram_signals SET reply_depth = COALESCE(reply_depth, 0)"))
         conn.execute(text("UPDATE telegram_signals SET conversation_score = COALESCE(conversation_score, 0)"))
+        conn.execute(text("UPDATE telegram_signals SET lead_score_100 = COALESCE(lead_score_100, final_lead_score, signal_score, 0)"))
 
 
 def init_db():

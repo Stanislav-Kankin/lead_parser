@@ -110,6 +110,10 @@ def get_signals(
     review_status_in: list[str] | None = None,
     status: str | None = None,
     status_not: str | None = None,
+    min_score: int | None = None,
+    marketplace: str | None = None,
+    niche: str | None = None,
+    lead_category: str | None = None,
 ) -> list[TelegramSignal]:
     with SessionLocal() as session:
         stmt = select(TelegramSignal)
@@ -133,6 +137,14 @@ def get_signals(
             stmt = stmt.where(TelegramSignal.status == status)
         if status_not:
             stmt = stmt.where(TelegramSignal.status != status_not)
+        if min_score is not None:
+            stmt = stmt.where(TelegramSignal.lead_score_100 >= min_score)
+        if marketplace:
+            stmt = stmt.where(TelegramSignal.marketplace == marketplace)
+        if niche:
+            stmt = stmt.where(TelegramSignal.niche == niche)
+        if lead_category:
+            stmt = stmt.where(TelegramSignal.lead_category == lead_category)
         if only_actionable or lead_fit or lead_fit_in or review_status or review_status_in:
             stmt = _exclude_obvious_ads(stmt)
 
@@ -143,6 +155,7 @@ def get_signals(
         )
         stmt = stmt.order_by(
             desc(TelegramSignal.is_person_reachable),
+            desc(TelegramSignal.lead_score_100),
             desc(TelegramSignal.contact_entity_score),
             desc(TelegramSignal.final_lead_score),
             desc(TelegramSignal.conversation_score),
@@ -222,6 +235,10 @@ def get_reviewed_leads(review_status: str, segment: str | None = None, limit: in
 
 def get_contacted_leads(segment: str | None = None, limit: int | None = None) -> list[TelegramSignal]:
     return get_signals(segment=segment, limit=limit, lead_fit_in=["target", "review"], review_status="ok", status="contacted")
+
+
+def get_hot_leads(limit: int | None = 10) -> list[TelegramSignal]:
+    return get_signals(limit=limit, lead_fit_in=["target", "review"], review_status="unchecked", status_not="contacted", min_score=80)
 
 
 def get_signal_by_id(signal_id: int) -> TelegramSignal | None:

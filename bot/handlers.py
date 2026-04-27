@@ -20,6 +20,7 @@ from telegram_signals.repository import (
     get_signal_by_id,
     get_business_like_messages,
     get_discussion_leads,
+    get_hot_leads,
     get_market_intelligence,
     get_review_leads,
     get_reviewed_leads,
@@ -223,6 +224,20 @@ def _build_lead_summary(signal) -> str:
         why = why.split(';')[0].strip()
         return why[:160]
     return "Нужна ручная проверка контекста"
+
+
+def _build_hot_lead_alert(signal) -> str:
+    message_url = _build_message_link(signal)
+    link = f'\n<a href="{escape_html(message_url)}">Открыть сообщение</a>' if message_url else ""
+    return (
+        "🔥 <b>Новый горячий лид</b>\n"
+        f"<b>Score:</b> {getattr(signal, 'lead_score_100', 0) or 0}\n"
+        f"<b>Чат:</b> {escape_html(getattr(signal, 'chat_title', None) or '-')}\n"
+        f"<b>Тип:</b> {escape_html(getattr(signal, 'lead_category', None) or '-')}\n"
+        f"<b>ICP:</b> {escape_html(getattr(signal, 'likely_icp', None) or '-')}\n"
+        f"<b>Сообщение:</b> {escape_html(_trim_text(getattr(signal, 'text_excerpt', None) or getattr(signal, 'message_text', None) or '-', 220))}"
+        f"{link}"
+    )
 
 
 def _recency_score(signal) -> int:
@@ -548,6 +563,12 @@ async def tg_collect(callback: CallbackQuery):
         parse_mode="HTML",
         reply_markup=telegram_signals_menu(),
     )
+    for hot_lead in get_hot_leads(limit=3):
+        await callback.message.answer(
+            _build_hot_lead_alert(hot_lead),
+            parse_mode="HTML",
+            disable_web_page_preview=True,
+        )
 
 
 @router.callback_query(F.data.startswith("tg_list:"))
@@ -1182,6 +1203,8 @@ def format_sales_lead_card(idx: int, signal) -> str:
 
     return (
         f"<b>{idx}. {escape_html(username)}</b>\n"
+        f"<b>Score:</b> {getattr(signal, 'lead_score_100', 0) or 0} | <b>Боль:</b> {escape_html(getattr(signal, 'lead_category', None) or '-')}\n"
+        f"<b>ICP:</b> {escape_html(getattr(signal, 'likely_icp', None) or '-')} | <b>MP:</b> {escape_html(getattr(signal, 'marketplace', None) or '-')}\n"
         f"<b>Кому писать:</b> {who_line}\n"
         f"<b>Профиль/username:</b> {profile_line}\n"
         f"<b>Чат:</b> {chat_line}\n"
@@ -1212,6 +1235,8 @@ def format_signal_card(idx: int, signal) -> str:
         f"<b>{idx}. {title}</b>\n"
         f"<b>Сегмент:</b> {escape_html(_ru_segment(signal.segment))}\n"
         f"<b>Lead fit:</b> {escape_html(_ru_lead_fit(lead_fit))} | <b>Действие:</b> {escape_html(_ru_next_step(next_step))}\n"
+        f"<b>Score 100:</b> {getattr(signal, 'lead_score_100', 0) or 0} | <b>Боль:</b> {escape_html(getattr(signal, 'lead_category', None) or '-')}\n"
+        f"<b>ICP:</b> {escape_html(getattr(signal, 'likely_icp', None) or '-')} | <b>MP:</b> {escape_html(getattr(signal, 'marketplace', None) or '-')}\n"
         f"<b>Тип:</b> {escape_html(message_type)} / {escape_html(conversation_type)}\n"
         f"<b>Автор-профиль:</b> {escape_html(author_type)}\n"
         f"<b>Уровень:</b> {escape_html(_ru_signal_level(signal.signal_level))}\n"

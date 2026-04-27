@@ -670,6 +670,184 @@ def classify_outreach_segment(text_l: str, lead_fit: str, message_type: str) -> 
     }
 
 
+def _detect_lead_category(text_l: str, lead_fit: str, message_type: str) -> str:
+    if lead_fit in {"noise", "contractor"} or message_type in {"noise", "supplier_ad", "vacancy", "service_ad"}:
+        return "not_target"
+    if any(x in text_l for x in ["ищем подрядчика", "ищем агентство", "нужен подрядчик", "кого посоветуете", "кто поможет"]):
+        return "contractor_search"
+    if any(x in text_l for x in ["маркетолог", "директолог", "настройка директ", "настроить директ"]):
+        return "marketer_search"
+    if any(x in text_l for x in ["не окупается", "дорогая реклама", "внутренняя реклама", "сливаем бюджет", "ставки"]):
+        return "ads_complaint"
+    if any(x in text_l for x in ["комисси", "марж", "экономик", "штраф"]):
+        return "unit_economics"
+    if any(x in text_l for x in ["возврат", "пвз", "логистик", "невыкуп", "груз", "границе"]):
+        return "returns_logistics"
+    if any(x in text_l for x in ["свой сайт", "свой магазин", "прямой канал", "яндекс кит", "яндекс.кит", "direct", "внешний трафик"]):
+        return "direct_channel"
+    if any(x in text_l for x in ["продаж нет", "нет продаж", "рост продаж", "первые продажи", "карточк"]):
+        return "sales_growth"
+    if any(x in text_l for x in ["консультац", "подскажите", "кто сталкивался", "кто знает"]):
+        return "consultation_request"
+    if any(x in text_l for x in ["wb", "wildberries", "ozon", "маркетплейс", "селлер"]):
+        return "marketplace_complaint"
+    return "not_target"
+
+
+def _extract_marketplace(text_l: str) -> str:
+    has_wb = any(x in text_l for x in ["wb", "wildberries", "вб", "вайлдбер"])
+    has_ozon = "ozon" in text_l or "озон" in text_l
+    if has_wb and has_ozon:
+        return "WB/Ozon"
+    if has_wb:
+        return "WB"
+    if has_ozon:
+        return "Ozon"
+    if "маркетплейс" in text_l or "мп" in text_l:
+        return "marketplaces"
+    return ""
+
+
+def _extract_niche(text_l: str) -> str:
+    checks = [
+        ("электроника", ["электроник", "телефон", "ноутбук", "видеокарт", "гаджет"]),
+        ("одежда", ["одежд", "бренд одежды", "размер", "обув"]),
+        ("косметика", ["косметик", "крем", "уход", "парфюм"]),
+        ("еда/продукты", ["молок", "сыр", "кофе", "чай", "продукт"]),
+        ("товары для дома", ["мебел", "посуда", "дом", "текстиль"]),
+    ]
+    for label, tokens in checks:
+        if any(token in text_l for token in tokens):
+            return label
+    return ""
+
+
+def _extract_budget_hint(text_l: str) -> str:
+    match = re.search(r"(\d+[\s\-]?\d*)\s*(к|тыс|млн|₽|руб)", text_l, flags=re.I)
+    if match:
+        return match.group(0)
+    if any(x in text_l for x in ["бюджет", "оборот", "выручк", "млн"]):
+        return "mentioned"
+    return ""
+
+
+def _detect_urgency(text_l: str, message_date_present: bool = True) -> str:
+    if any(x in text_l for x in ["срочно", "сегодня", "завтра", "горит", "быстро", "прямо сейчас"]):
+        return "high"
+    if any(x in text_l for x in ["подскажите", "кто знает", "кто сталкивался", "нужен", "ищем"]):
+        return "medium"
+    return "low" if message_date_present else ""
+
+
+def _detect_likely_icp(text_l: str, author_type_guess: str, owner_likelihood_score: int, contractor_penalty: int) -> str:
+    if contractor_penalty >= owner_likelihood_score + 3:
+        return "agency_not_target"
+    if any(x in text_l for x in ["производим", "производитель", "свое производство", "наш бренд", "бренд"]):
+        return "brand_manufacturer"
+    if any(x in text_l for x in ["оборот", "млн", "склад", "sku", "поставк"]) and any(x in text_l for x in ["wb", "ozon", "маркетплейс"]):
+        return "large_seller"
+    if any(x in text_l for x in ["у меня", "мой товар", "моя карточка", "я селлер", "продавцу"]):
+        return "middle_seller"
+    if any(x in text_l for x in ["новичок", "только начинаю", "первая поставка", "первый товар"]):
+        return "newbie"
+    if any(x in text_l for x in ["маркетолог компании", "наш маркетолог", "я маркетолог в"]):
+        return "company_marketer"
+    if author_type_guess == "business":
+        return "business_owner"
+    return "unknown"
+
+
+def _score_100(
+    *,
+    lead_category: str,
+    lead_fit: str,
+    author_type_guess: str,
+    likely_icp: str,
+    pain_score: int,
+    intent_score: int,
+    icp_score: int,
+    contactability_score: int,
+    promo_penalty: int,
+    contractor_penalty: int,
+    urgency: str,
+    budget_hint: str,
+) -> int:
+    score = 5
+    if lead_fit == "target":
+        score += 20
+    elif lead_fit == "review":
+        score += 10
+    if lead_category in {"contractor_search", "marketer_search"}:
+        score += 40
+    if lead_category in {"ads_complaint", "marketplace_complaint", "unit_economics", "returns_logistics", "sales_growth"}:
+        score += 30
+    if lead_category in {"direct_channel", "consultation_request"}:
+        score += 25
+    if author_type_guess == "business":
+        score += 20
+    if likely_icp in {"brand_manufacturer", "large_seller", "business_owner"}:
+        score += 15
+    elif likely_icp == "middle_seller":
+        score += 8
+    elif likely_icp == "newbie":
+        score -= 30
+    if budget_hint:
+        score += 15
+    if urgency == "high":
+        score += 10
+    elif urgency == "medium":
+        score += 5
+    score += min(pain_score, 20) // 2
+    score += min(intent_score, 16) // 2
+    score += min(icp_score, 12) // 3
+    score += min(contactability_score, 8)
+    score -= min(promo_penalty, 40)
+    score -= min(contractor_penalty, 50)
+    if lead_category == "not_target":
+        score -= 40
+    return max(1, min(100, score))
+
+
+def _build_openers(
+    *,
+    author_name: str | None,
+    chat_title: str | None,
+    lead_category: str,
+    marketplace: str,
+) -> dict:
+    first_name = (author_name or "").strip().split(" ")[0] if (author_name or "").strip() else ""
+    hello = f"{first_name}, добрый день!" if first_name else "Добрый день!"
+    chat = (chat_title or "чате селлеров").strip()
+    mp = marketplace or "маркетплейсах"
+
+    if lead_category == "returns_logistics":
+        soft = f"{hello}\n\nУвидел ваше сообщение про возвраты в чате «{chat}». Похоже, это может быть не брак, а невыкуп/срок хранения. Если скажете категорию товара, подскажу, где обычно копать в первую очередь."
+        expert = f"{hello}\n\nПо возвратам на {mp} я бы сначала проверил SKU, регионы/ПВЗ и срок доставки. Часто рост начинается не из-за товара, а из-за невыкупов после длинной доставки."
+        sales = f"{hello}\n\nЕсли возвраты начали съедать экономику, можно быстро разложить это по SKU и логистике. Можем подсказать, как это проверить без большого аудита."
+    elif lead_category == "unit_economics":
+        soft = f"{hello}\n\nУвидел ваше сообщение про экономику в чате «{chat}». Если коротко, я бы разделил комиссии, логистику, возвраты, рекламу и скидки - обычно после этого видно, где просадка."
+        expert = f"{hello}\n\nКогда маржа на {mp} проседает, общий ДРР мало что объясняет. Лучше смотреть вклад каждой статьи затрат по SKU/категории."
+        sales = f"{hello}\n\nЕсли интересно, можем коротко показать, как разложить экономику MP и понять, где есть потенциал для допканала без отказа от площадки."
+    elif lead_category == "sales_growth":
+        soft = f"{hello}\n\nУвидел ваше сообщение про карточку/продажи в чате «{chat}». Часто проблема не только в цене: карточка может не набрать первые поведенческие сигналы."
+        expert = f"{hello}\n\nЯ бы проверил запросы, показы, клики и добавления в корзину. Если клики есть, а корзины нет - обычно проблема в первом экране/оффере."
+        sales = f"{hello}\n\nМожем коротко посмотреть логику запуска карточки: где проседает спрос и стоит ли подключать внешний прогрев."
+    elif lead_category == "direct_channel":
+        soft = f"{hello}\n\nУвидел ваше сообщение про прямой канал в чате «{chat}». Тут обычно важно не уходить с MP, а аккуратно проверить допканал рядом с ним."
+        expert = f"{hello}\n\nПеред сайтом/Китом я бы проверил повторный спрос, маржу по SKU и возможность вести трафик без просадки экономики."
+        sales = f"{hello}\n\nМы как раз помогаем селлерам тестировать сайт/Яндекс.Кит + Директ как допканал к WB/Ozon. Можно обсудить, подойдёт ли это вам."
+    elif lead_category in {"contractor_search", "marketer_search"}:
+        soft = f"{hello}\n\nУвидел ваше сообщение в чате «{chat}». Могу подсказать, на какие вопросы подрядчику стоит ответить до старта, чтобы не слить бюджет."
+        expert = f"{hello}\n\nПеред выбором подрядчика я бы попросил показать экономику по воронке, план теста и стоп-критерии. Это быстро отсеивает слабые варианты."
+        sales = f"{hello}\n\nМы работаем с селлерами и брендами по росту продаж вне зависимости от одной площадки. Если актуально, можем коротко обсудить вашу задачу."
+    else:
+        soft = f"{hello}\n\nУвидел ваше сообщение в чате «{chat}». Похоже, вопрос не только технический. Если хотите, могу подсказать, где обычно искать причину."
+        expert = f"{hello}\n\nЯ бы сначала разделил проблему на товар, карточку, логистику, рекламу и экономику. Так быстрее понять, где реально узкое место."
+        sales = f"{hello}\n\nЕсли после первичного разбора станет понятно, что проблема в экономике канала, можно обсудить варианты роста без отказа от WB/Ozon."
+
+    return {"opener_soft": soft, "opener_expert": expert, "opener_sales": sales}
+
+
 def _build_lead_fit(
     *,
     message_type: str,
@@ -958,6 +1136,32 @@ def classify_signal(
     )
     is_actionable = lead_fit == "target"
     outreach = classify_outreach_segment(full_l, lead_fit, message_type)
+    lead_category = _detect_lead_category(full_l, lead_fit, message_type)
+    marketplace = _extract_marketplace(full_l)
+    niche = _extract_niche(full_l)
+    budget_hint = _extract_budget_hint(full_l)
+    urgency = _detect_urgency(text_l)
+    likely_icp = _detect_likely_icp(full_l, author_type_guess, owner_likelihood_score, contractor_penalty)
+    lead_score_100 = _score_100(
+        lead_category=lead_category,
+        lead_fit=lead_fit,
+        author_type_guess=author_type_guess,
+        likely_icp=likely_icp,
+        pain_score=pain_score,
+        intent_score=intent_score,
+        icp_score=icp_score,
+        contactability_score=contactability_score,
+        promo_penalty=promo_penalty,
+        contractor_penalty=contractor_penalty,
+        urgency=urgency,
+        budget_hint=budget_hint,
+    )
+    openers = _build_openers(
+        author_name=author_name,
+        chat_title=chat_title,
+        lead_category=lead_category,
+        marketplace=marketplace,
+    )
 
     reasons = []
     if reply_depth >= 1:
@@ -1022,4 +1226,12 @@ def classify_signal(
         "why_actionable": why,
         "recommended_opener": build_recommended_opener(full_l, message_type, lead_fit),
         **outreach,
+        "lead_category": lead_category,
+        "lead_score_100": lead_score_100,
+        "likely_icp": likely_icp,
+        "marketplace": marketplace,
+        "niche": niche,
+        "budget_hint": budget_hint,
+        "urgency": urgency,
+        **openers,
     }
