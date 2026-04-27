@@ -88,34 +88,32 @@ def _build_outreach_text(signal) -> str:
 
     if any(token in haystack for token in ["карточк", "первые продажи", "не берут", "себестоимости", "нет продаж"]):
         hook = (
-            "увидел ваш вопрос про первые продажи карточки и ситуацию, когда без сильной скидки товар не начинает ехать."
+            "увидел ваш вопрос про первые продажи карточки и ситуацию, когда без сильной скидки товар почти не едет."
         )
-        hypothesis = (
-            "У селлеров это часто упирается не только в карточку, а в отсутствие внешнего спроса: маркетплейс даёт трафик дорого, "
-            "а своего канала прогрева пока нет."
+        bridge = (
+            "Похоже, проблема понятная: внутри маркетплейса запуск нового товара всё чаще становится дорогим и непредсказуемым."
         )
     elif any(token in haystack for token in ["возврат", "пвз", "комисси", "марж", "штраф"]):
         hook = "увидел ваш вопрос про экономику на маркетплейсах."
-        hypothesis = (
-            "Когда комиссии, возвраты и внутренняя реклама съедают маржу, обычно полезно проверить прямой канал параллельно WB/Ozon, "
-            "а не пытаться всё добить внутри площадки."
+        bridge = (
+            "Похоже, боль понятная: комиссии, возвраты и внутренняя реклама начинают съедать то, что должно оставаться в марже."
         )
     elif any(token in haystack for token in ["клиентск", "повторн", "прямой канал", "яндекс.кит", "яндекс кит", "свой магазин"]):
         hook = "увидел ваш вопрос про прямой канал и свою клиентскую базу."
-        hypothesis = (
-            "Здесь логика как раз в том, чтобы не уходить с маркетплейсов, а добавить параллельный магазин/Яндекс.Кит и проверить спрос через Директ."
+        bridge = (
+            "Это как раз та ситуация, где обычно смотрят не на уход с маркетплейсов, а на аккуратный допканал рядом с ними."
         )
     else:
         hook = "увидел ваш вопрос в чате селлеров."
-        hypothesis = (
-            "Похоже, там может быть гипотеза про прямой канал продаж: сайт или Яндекс.Кит + Директ параллельно маркетплейсам."
+        bridge = (
+            "По описанию похоже, что вопрос уже не только технический, а про экономику продаж и зависимость от площадки."
         )
 
     return (
         f"{hello}\n\n"
         f"{hook}\n\n"
-        f"{hypothesis}\n\n"
-        "Могу коротко накидать 2-3 гипотезы, где у вас может теряться экономика и есть ли смысл тестировать прямой канал без отказа от маркетплейсов."
+        f"{bridge}\n\n"
+        "Если интересно, можем коротко обсудить варианты: где сейчас теряется экономика и есть ли смысл тестировать прямой канал без отказа от WB/Ozon."
     )
 
 
@@ -593,15 +591,20 @@ async def draft_outreach_message(callback: CallbackQuery):
         "page": page,
         "segment": segment,
     }
+    profile_url = _build_contact_link(signal)
+    message_url = _build_message_link(signal)
     text = (
-        "<b>Черновик сообщения</b>\n"
+        "<b>Скопируй текст и отправь вручную</b>\n"
         f"<b>Кому:</b> {escape_html(str(target))}\n\n"
-        f"{escape_html(draft)}"
+        f"<pre>{escape_html(draft)}</pre>"
     )
-    keyboard = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="📨 Отправить от моего аккаунта", callback_data=f"send_msg:{signal_id}")],
-        [InlineKeyboardButton(text="⬅️ Назад к лиду", callback_data=f"{view}:{page}:{segment}")],
-    ])
+    rows = []
+    if profile_url:
+        rows.append([InlineKeyboardButton(text="✉️ Открыть личку", url=profile_url)])
+    elif message_url:
+        rows.append([InlineKeyboardButton(text="Открыть сообщение", url=message_url)])
+    rows.append([InlineKeyboardButton(text="⬅️ Назад к лиду", callback_data=f"{view}:{page}:{segment}")])
+    keyboard = InlineKeyboardMarkup(inline_keyboard=rows)
     await _send_or_edit(callback, text, reply_markup=keyboard)
     await callback.answer()
 
