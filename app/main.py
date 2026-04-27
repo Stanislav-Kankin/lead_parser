@@ -70,7 +70,7 @@ def telegram_signals_dashboard(
         form { display: flex; gap: 8px; align-items: end; margin-bottom: 16px; flex-wrap: wrap; }
         label { display: grid; gap: 4px; font-size: 12px; color: #52606d; }
         input, select, button { padding: 8px; border: 1px solid #bcccdc; border-radius: 6px; }
-        table { border-collapse: collapse; width: 100%; font-size: 13px; }
+        table { border-collapse: collapse; width: 100%%; font-size: 13px; }
         th, td { border-bottom: 1px solid #d9e2ec; padding: 8px; vertical-align: top; }
         th { position: sticky; top: 0; background: #f0f4f8; text-align: left; }
         td:nth-child(9), td:nth-child(10) { max-width: 340px; }
