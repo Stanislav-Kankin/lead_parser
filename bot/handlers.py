@@ -81,6 +81,7 @@ def _build_outreach_text(signal) -> str:
     name = (getattr(signal, "author_name", None) or "").strip()
     first_name = name.split()[0] if name and name.lower() not in {"-", "unknown"} else ""
     hello = f"{first_name}, добрый день!" if first_name else "Добрый день!"
+    chat_title = (getattr(signal, "chat_title", None) or "чате селлеров").strip()
 
     message_text = (getattr(signal, "message_text", None) or "").lower()
     pain = _build_lead_summary(signal).lower()
@@ -111,7 +112,7 @@ def _build_outreach_text(signal) -> str:
 
     return (
         f"{hello}\n\n"
-        f"{hook}\n\n"
+        f"{hook} В чате «{chat_title}».\n\n"
         f"{bridge}\n\n"
         "Если интересно, можем коротко обсудить варианты: где сейчас теряется экономика и есть ли смысл тестировать прямой канал без отказа от WB/Ozon."
     )
@@ -593,11 +594,7 @@ async def draft_outreach_message(callback: CallbackQuery):
     }
     profile_url = _build_contact_link(signal)
     message_url = _build_message_link(signal)
-    text = (
-        "<b>Скопируй текст и отправь вручную</b>\n"
-        f"<b>Кому:</b> {escape_html(str(target))}\n\n"
-        f"<code>{escape_html(draft)}</code>"
-    )
+    text = "<b>Черновик ниже отдельным сообщением.</b>\n" f"<b>Кому:</b> {escape_html(str(target))}"
     rows = []
     if profile_url:
         rows.append([InlineKeyboardButton(text="✉️ Открыть личку", url=profile_url)])
@@ -606,6 +603,7 @@ async def draft_outreach_message(callback: CallbackQuery):
     rows.append([InlineKeyboardButton(text="⬅️ Назад к лиду", callback_data=f"{view}:{page}:{segment}")])
     keyboard = InlineKeyboardMarkup(inline_keyboard=rows)
     await _send_or_edit(callback, text, reply_markup=keyboard)
+    await callback.message.answer(draft, disable_web_page_preview=True)
     await callback.answer()
 
 
