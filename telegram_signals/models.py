@@ -89,3 +89,22 @@ class TelegramSignal(Base):
     reviewed_at = Column(DateTime, nullable=True)
     is_actionable = Column(Boolean, nullable=False, default=False)
     created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+
+
+class SearchProfile(Base):
+    __tablename__ = "search_profiles"
+
+    id = Column(Integer, primary_key=True)
+    name = Column(String, nullable=False)
+    segment = Column(String, nullable=False, default="ecom_marketplace_pain")
+    queries_text = Column(Text, nullable=False, default="")
+    stop_words_text = Column(Text, nullable=True)
+    good_chat_hints_text = Column(Text, nullable=True)
+    bad_chat_hints_text = Column(Text, nullable=True)
+    max_age_hours = Column(Integer, nullable=False, default=96)
+    limit_chats = Column(Integer, nullable=False, default=12)
+    limit_messages_per_chat = Column(Integer, nullable=False, default=80)
+    min_score = Column(Integer, nullable=False, default=0)
+    is_active = Column(Boolean, nullable=False, default=True)
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+    updated_at = Column(DateTime, default=datetime.utcnow, nullable=False)

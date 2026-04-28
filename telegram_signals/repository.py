@@ -4,10 +4,10 @@ from typing import Iterable
 
 from datetime import datetime
 
-from sqlalchemy import case, desc, or_, select
+from sqlalchemy import case, desc, func, or_, select
 
 from storage.db import SessionLocal
-from .models import TelegramSignal
+from .models import SearchProfile, TelegramSignal
 
 
 AD_TEXT_EXCLUDE_PATTERNS = (
@@ -115,6 +115,7 @@ def get_signals(
     marketplace: str | None = None,
     niche: str | None = None,
     lead_category: str | None = None,
+    offset: int | None = None,
 ) -> list[TelegramSignal]:
     with SessionLocal() as session:
         stmt = select(TelegramSignal)
@@ -170,8 +171,42 @@ def get_signals(
             desc(TelegramSignal.created_at),
         )
         if limit:
+            if offset:
+                stmt = stmt.offset(offset)
             stmt = stmt.limit(limit)
         return list(session.execute(stmt).scalars().all())
+
+
+def count_signals(
+    *,
+    lead_fit_in: list[str] | None = None,
+    review_status: str | None = None,
+    status: str | None = None,
+    crm_tag: str | None = None,
+    min_score: int | None = None,
+    marketplace: str | None = None,
+    niche: str | None = None,
+    lead_category: str | None = None,
+) -> int:
+    with SessionLocal() as session:
+        stmt = select(func.count(TelegramSignal.id))
+        if lead_fit_in:
+            stmt = stmt.where(TelegramSignal.lead_fit.in_(lead_fit_in))
+        if review_status:
+            stmt = stmt.where(TelegramSignal.review_status == review_status)
+        if status:
+            stmt = stmt.where(TelegramSignal.status == status)
+        if crm_tag:
+            stmt = stmt.where(TelegramSignal.crm_tag == crm_tag)
+        if min_score is not None:
+            stmt = stmt.where(TelegramSignal.lead_score_100 >= min_score)
+        if marketplace:
+            stmt = stmt.where(TelegramSignal.marketplace == marketplace)
+        if niche:
+            stmt = stmt.where(TelegramSignal.niche == niche)
+        if lead_category:
+            stmt = stmt.where(TelegramSignal.lead_category == lead_category)
+        return int(session.execute(stmt).scalar_one() or 0)
 
 
 def get_target_leads(segment: str | None = None, limit: int | None = None, *, include_reviewed: bool = False) -> list[TelegramSignal]:
@@ -289,3 +324,43 @@ def update_signal_crm(signal_id: int, *, status: str | None = None, crm_tag: str
             item.reviewed_at = datetime.utcnow()
         session.commit()
         return True
+
+
+def list_search_profiles(active_only: bool = False) -> list[SearchProfile]:
+    with SessionLocal() as session:
+        stmt = select(SearchProfile).order_by(desc(SearchProfile.is_active), SearchProfile.id)
+        if active_only:
+            stmt = stmt.where(SearchProfile.is_active == True)  # noqa: E712
+        return list(session.execute(stmt).scalars().all())
+
+
+def get_search_profile(profile_id: int) -> SearchProfile | None:
+    with SessionLocal() as session:
+        return session.get(SearchProfile, profile_id)
+
+
+def save_search_profile(data: dict, profile_id: int | None = None) -> SearchProfile | None:
+    with SessionLocal() as session:
+        item = session.get(SearchProfile, profile_id) if profile_id else SearchProfile()
+        if item is None:
+            return None
+        for key in [
+            "name",
+            "segment",
+            "queries_text",
+            "stop_words_text",
+            "good_chat_hints_text",
+            "bad_chat_hints_text",
+            "max_age_hours",
+            "limit_chats",
+            "limit_messages_per_chat",
+            "min_score",
+            "is_active",
+        ]:
+            if key in data:
+                setattr(item, key, data[key])
+        item.updated_at = datetime.utcnow()
+        session.add(item)
+        session.commit()
+        session.refresh(item)
+        return item

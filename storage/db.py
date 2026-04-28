@@ -4,7 +4,8 @@ from sqlalchemy import create_engine, inspect, text
 from sqlalchemy.orm import sessionmaker
 
 from models.lead import Base
-from telegram_signals.models import TelegramSignal  # noqa: F401
+from telegram_signals.keywords import CHAT_BAD_HINTS, CHAT_DISCOVERY_KEYWORDS, CHAT_GOOD_HINTS, SEGMENT_LABELS
+from telegram_signals.models import SearchProfile, TelegramSignal  # noqa: F401
 
 DATABASE_URL = os.getenv("DATABASE_URL", "sqlite:///./leads.db")
 
@@ -158,3 +159,28 @@ def init_db():
     Base.metadata.create_all(bind=engine)
     _ensure_columns()
     _ensure_telegram_signal_columns()
+    _ensure_default_search_profiles()
+
+
+def _ensure_default_search_profiles():
+    with SessionLocal() as session:
+        exists = session.query(SearchProfile.id).first()
+        if exists:
+            return
+        for segment, queries in CHAT_DISCOVERY_KEYWORDS.items():
+            session.add(
+                SearchProfile(
+                    name=SEGMENT_LABELS.get(segment, segment),
+                    segment=segment,
+                    queries_text="\n".join(queries),
+                    stop_words_text="",
+                    good_chat_hints_text="\n".join(CHAT_GOOD_HINTS),
+                    bad_chat_hints_text="\n".join(CHAT_BAD_HINTS),
+                    max_age_hours=96,
+                    limit_chats=12,
+                    limit_messages_per_chat=80,
+                    min_score=0,
+                    is_active=True,
+                )
+            )
+        session.commit()

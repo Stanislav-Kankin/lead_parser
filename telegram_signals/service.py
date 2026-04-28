@@ -61,7 +61,7 @@ CHAT_TITLE_NEGATIVE_HINTS = (
 )
 
 
-def _is_relevant_chat(chat: Any, segment: str) -> bool:
+def _is_relevant_chat(chat: Any, segment: str, good_hints: list[str] | None = None, bad_hints: list[str] | None = None) -> bool:
     title = (_chat_title(chat) or "").lower()
     username = (getattr(chat, "username", None) or "").lower()
     haystack = f"{title} {username}".strip()
@@ -69,8 +69,14 @@ def _is_relevant_chat(chat: Any, segment: str) -> bool:
     if not haystack:
         return False
 
-    if any(token in haystack for token in CHAT_TITLE_NEGATIVE_HINTS):
+    negative = [item.lower() for item in (bad_hints or CHAT_TITLE_NEGATIVE_HINTS) if item]
+    positive = [item.lower() for item in (good_hints or []) if item]
+
+    if any(token in haystack for token in negative):
         return False
+
+    if positive:
+        return any(token in haystack for token in positive)
 
     if segment == "manufacturer_secondary":
         return any(token in haystack for token in ("бренд", "производ", "опт", "market", "маркетплей", "ecom"))
@@ -151,6 +157,7 @@ async def collect_signals(
     limit_chats: int = 12,
     limit_messages_per_chat: int = 80,
     max_age_hours: int = 96,
+    profile: dict | None = None,
 ) -> dict:
     if segment not in CHAT_DISCOVERY_KEYWORDS:
         raise ValueError(f"Неизвестный сегмент: {segment}")
@@ -167,14 +174,21 @@ async def collect_signals(
     collected_items = []
 
     try:
-        for query in CHAT_DISCOVERY_KEYWORDS[segment]:
+        profile = profile or {}
+        queries = profile.get("queries") or CHAT_DISCOVERY_KEYWORDS[segment]
+        stop_words = [item.lower() for item in profile.get("stop_words", []) if item]
+        good_hints = profile.get("good_chat_hints") or None
+        bad_hints = profile.get("bad_chat_hints") or None
+        min_score = int(profile.get("min_score") or 0)
+
+        for query in queries:
             chats = await search_public_chats(client, query, limit=limit_chats)
 
             for chat in chats:
                 chat_id = getattr(chat, "id", None)
                 if not chat_id or chat_id in seen_chat_ids:
                     continue
-                if not _is_relevant_chat(chat, segment):
+                if not _is_relevant_chat(chat, segment, good_hints=good_hints, bad_hints=bad_hints):
                     logger.info(
                         "[telegram_signals] skip_chat_irrelevant segment=%s chat=%s",
                         segment,
@@ -222,6 +236,8 @@ async def collect_signals(
                 text = (getattr(msg, "message", None) or "").strip()
                 if len(text) < 30:
                     continue
+                if stop_words and any(word in text.lower() for word in stop_words):
+                    continue
 
                 signal = classify_signal(
                     text,
@@ -238,6 +254,8 @@ async def collect_signals(
                 lead_fit = str(signal.get("lead_fit") or "noise")
                 signal_level = _signal_level(signal)
                 if lead_fit == "noise" and signal_level == "low":
+                    continue
+                if min_score and int(signal.get("lead_score_100", 0) or 0) < min_score:
                     continue
 
                 kept_signals += 1
