@@ -29,7 +29,7 @@ JOB_LOCK = Lock()
 STATUS_LABELS = {
     "new": "Новый",
     "reviewed": "Прочитал",
-    "contacted": "Связались",
+    "contacted": "Написал",
     "replied": "Ответил",
     "warm": "Теплый",
     "meeting_booked": "Встреча",
@@ -121,6 +121,10 @@ def _action_form(signal_id: int, label: str, status: str | None = None, review_s
         f"<button type='submit' class='btn {tone}'>{escape(label)}</button>"
         "</form>"
     )
+
+
+def _count_signals(**kwargs) -> int:
+    return len(get_signals(limit=None, lead_fit_in=["target", "review"], **kwargs))
 
 
 def _run_collect_job() -> None:
@@ -231,7 +235,7 @@ def telegram_signals_dashboard(
             _action_form(item.id, "ОК", review_status="ok", tone="ok"),
             _action_form(item.id, "Не ОК", review_status="not_ok", tone="danger"),
             _action_form(item.id, "Прочитал", status="reviewed", review_status="ok"),
-            _action_form(item.id, "Связался", status="contacted", review_status="ok", tone="primary"),
+            _action_form(item.id, "Написал", status="contacted", review_status="ok", tone="primary"),
             _action_form(item.id, "Ответил", status="replied", review_status="ok"),
             _action_form(item.id, "Теплый", status="warm", review_status="ok"),
             _action_form(item.id, "Встреча", status="meeting_booked", review_status="ok"),
@@ -271,6 +275,7 @@ def telegram_signals_dashboard(
                 <section>
                   <div class="section-title">Черновик захода</div>
                   <p>{opener}</p>
+                  <button type="button" class="copy-btn" data-copy="{escape(opener, quote=True)}">Скопировать черновик</button>
                 </section>
               </div>
 
@@ -325,17 +330,20 @@ def telegram_signals_dashboard(
         job_class = "job-idle"
 
     quick_links = [
-        ("На проверку", "/telegram-signals?review_status=unchecked"),
-        ("ОК написать", "/telegram-signals?review_status=ok&status=new"),
-        ("Прочитал", "/telegram-signals?status=reviewed"),
-        ("Связались", "/telegram-signals?status=contacted"),
-        ("Ответили", "/telegram-signals?status=replied"),
-        ("Теплые", "/telegram-signals?status=warm"),
-        ("Встречи", "/telegram-signals?status=meeting_booked"),
-        ("Архив", "/telegram-signals?status=dead"),
-        ("Hot", "/telegram-signals?hot=true"),
+        ("На проверку", "/telegram-signals?review_status=unchecked", _count_signals(review_status="unchecked")),
+        ("ОК написать", "/telegram-signals?review_status=ok&status=new", _count_signals(review_status="ok", status="new")),
+        ("Прочитал", "/telegram-signals?status=reviewed", _count_signals(status="reviewed")),
+        ("Написал", "/telegram-signals?status=contacted", _count_signals(status="contacted")),
+        ("Ответили", "/telegram-signals?status=replied", _count_signals(status="replied")),
+        ("Теплые", "/telegram-signals?status=warm", _count_signals(status="warm")),
+        ("Встречи", "/telegram-signals?status=meeting_booked", _count_signals(status="meeting_booked")),
+        ("Архив", "/telegram-signals?status=dead", _count_signals(status="dead")),
+        ("Горячие", "/telegram-signals?hot=true", _count_signals(min_score=80)),
     ]
-    quick_nav = "".join(f"<a class='quick-link' href='{escape(url)}'>{escape(label)}</a>" for label, url in quick_links)
+    quick_nav = "".join(
+        f"<a class='quick-link' href='{escape(url)}'><span>{escape(label)}</span><b>{count}</b></a>"
+        for label, url, count in quick_links
+    )
 
     return f"""
     <!doctype html>
@@ -346,12 +354,13 @@ def telegram_signals_dashboard(
       <title>Telegram Signals</title>
       <style>
         :root {{
-          --bg: #f6f8fb;
+          --bg: #eef3f7;
           --panel: #ffffff;
           --text: #17202a;
           --muted: #667085;
           --line: #d9e2ec;
           --blue: #2563eb;
+          --cyan: #0891b2;
           --green: #0f9f6e;
           --red: #d92d20;
           --amber: #b7791f;
@@ -363,6 +372,46 @@ def telegram_signals_dashboard(
           color: var(--text);
           font: 14px/1.45 Inter, -apple-system, BlinkMacSystemFont, "Segoe UI", Arial, sans-serif;
         }}
+        .shell {{ display: grid; grid-template-columns: 248px minmax(0, 1fr); min-height: 100vh; }}
+        .sidebar {{
+          position: sticky;
+          top: 0;
+          height: 100vh;
+          padding: 22px 16px;
+          background: #10202f;
+          color: #d9e7f2;
+        }}
+        .brand {{ font-size: 20px; font-weight: 800; margin-bottom: 4px; }}
+        .brand-subtitle {{ color: #8fb0c7; font-size: 12px; margin-bottom: 22px; }}
+        .side-title {{ color: #8fb0c7; font-size: 11px; font-weight: 800; text-transform: uppercase; margin: 20px 10px 8px; }}
+        .side-link {{
+          display: flex;
+          justify-content: space-between;
+          align-items: center;
+          min-height: 38px;
+          padding: 0 10px;
+          color: #d9e7f2;
+          text-decoration: none;
+          border-radius: 7px;
+        }}
+        .side-link:hover {{ background: rgba(255,255,255,.08); }}
+        .side-link b {{
+          min-width: 28px;
+          padding: 2px 7px;
+          border-radius: 999px;
+          background: rgba(255,255,255,.12);
+          text-align: center;
+          font-size: 12px;
+        }}
+        .side-note {{
+          margin-top: 24px;
+          padding: 12px;
+          border: 1px solid rgba(255,255,255,.12);
+          border-radius: 8px;
+          color: #bdd1df;
+          font-size: 12px;
+        }}
+        .content {{ min-width: 0; }}
         .page {{ max-width: 1480px; margin: 0 auto; padding: 28px 24px 48px; }}
         .hero {{
           display: flex;
@@ -452,14 +501,24 @@ def telegram_signals_dashboard(
         .quick-nav {{ display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 14px; }}
         .quick-link {{
           display: inline-flex;
+          gap: 8px;
           align-items: center;
+          justify-content: space-between;
           min-height: 34px;
           border: 1px solid var(--line);
-          border-radius: 999px;
+          border-radius: 7px;
           background: #fff;
           color: #344054;
           padding: 0 12px;
           text-decoration: none;
+        }}
+        .quick-link b {{
+          min-width: 24px;
+          padding: 1px 7px;
+          border-radius: 999px;
+          background: #eef2f7;
+          text-align: center;
+          color: #475467;
         }}
         .lead-list {{ display: grid; gap: 14px; }}
         .lead-card {{
@@ -496,6 +555,18 @@ def telegram_signals_dashboard(
         .columns {{ display: grid; grid-template-columns: minmax(0, 1.1fr) minmax(0, .9fr); gap: 16px; }}
         .section-title {{ color: var(--muted); font-size: 12px; font-weight: 700; text-transform: uppercase; margin-bottom: 6px; }}
         p {{ margin: 0; white-space: pre-wrap; }}
+        .copy-btn {{
+          margin-top: 12px;
+          min-height: 34px;
+          border: 1px solid #bae6fd;
+          border-radius: 7px;
+          background: #ecfeff;
+          color: #155e75;
+          padding: 7px 10px;
+          cursor: pointer;
+          font: inherit;
+        }}
+        .copy-btn.done {{ background: #ecfdf3; border-color: #abefc6; color: #067647; }}
         .card-footer {{
           display: flex;
           justify-content: space-between;
@@ -509,6 +580,8 @@ def telegram_signals_dashboard(
         .inline-form {{ display: inline; margin: 0; }}
         .empty {{ background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: 28px; color: var(--muted); }}
         @media (max-width: 1100px) {{
+          .shell {{ display: block; }}
+          .sidebar {{ position: static; height: auto; }}
           .hero {{ display: block; }}
           .stats {{ min-width: 0; margin-top: 16px; }}
           .toolbar {{ align-items: flex-start; flex-direction: column; }}
@@ -519,10 +592,18 @@ def telegram_signals_dashboard(
       </style>
     </head>
     <body>
-      <main class="page">
+      <div class="shell">
+      <aside class="sidebar">
+        <div class="brand">Telegram Signals</div>
+        <div class="brand-subtitle">поиск B2B-сигналов в Telegram</div>
+        <div class="side-title">Очереди</div>
+        {quick_nav.replace("quick-link", "side-link")}
+        <div class="side-note">Логика работы: собрать сигналы, проверить людей, написать по черновику, вести статус до ответа или встречи.</div>
+      </aside>
+      <main class="page content">
         <header class="hero">
           <div>
-            <h1>Telegram Signals</h1>
+            <h1>База лидов</h1>
             <div class="subtitle">Рабочая база лидов: фильтруем сигналы, помечаем контакт, ведем статус до ответа и встречи.</div>
           </div>
           <div class="stats">
@@ -544,7 +625,7 @@ def telegram_signals_dashboard(
 
         <form class="filters">
           <label>Score от <input name="min_score" type="number" value="{score}" min="0" max="100"></label>
-          <label>Marketplace <select name="marketplace">{marketplace_options}</select></label>
+          <label>Площадка <select name="marketplace">{marketplace_options}</select></label>
           <label>Статус <select name="status">{status_options}</select></label>
           <label>Разбор <select name="review_status">{review_options}</select></label>
           <label>Боль <select name="lead_category">{category_options}</select></label>
@@ -557,6 +638,21 @@ def telegram_signals_dashboard(
           {"".join(cards) if cards else '<div class="empty">Под эти фильтры лидов нет.</div>'}
         </section>
       </main>
+      </div>
+      <script>
+        document.querySelectorAll('.copy-btn').forEach((button) => {{
+          button.addEventListener('click', async () => {{
+            const text = button.dataset.copy || '';
+            try {{
+              await navigator.clipboard.writeText(text);
+              button.textContent = 'Скопировано';
+              button.classList.add('done');
+            }} catch (e) {{
+              button.textContent = 'Не скопировалось';
+            }}
+          }});
+        }});
+      </script>
     </body>
     </html>
     """
