@@ -1,6 +1,7 @@
 import os
 
 from sqlalchemy import create_engine, inspect, text
+from sqlalchemy import Column, DateTime, Integer, String
 from sqlalchemy.orm import sessionmaker
 
 from models.lead import Base
@@ -19,6 +20,15 @@ engine = create_engine(
     connect_args={"check_same_thread": False},
 )
 SessionLocal = sessionmaker(bind=engine, autoflush=False, autocommit=False)
+
+
+class SeenAuthor(Base):
+    __tablename__ = "seen_authors"
+
+    id = Column(Integer, primary_key=True)
+    author_id = Column(String, unique=True, nullable=False, index=True)
+    last_signal_at = Column(DateTime, nullable=True)
+    signal_count_7d = Column(Integer, nullable=False, default=0)
 
 
 
@@ -71,7 +81,8 @@ TELEGRAM_SIGNAL_REQUIRED_COLUMNS = {
     "comment": "ALTER TABLE telegram_signals ADD COLUMN comment TEXT",
     "review_status": "ALTER TABLE telegram_signals ADD COLUMN review_status VARCHAR DEFAULT 'unchecked'",
     "reviewed_at": "ALTER TABLE telegram_signals ADD COLUMN reviewed_at DATETIME",
-    "is_actionable": "ALTER TABLE telegram_signals ADD COLUMN is_actionable BOOLEAN DEFAULT 0"
+    "is_actionable": "ALTER TABLE telegram_signals ADD COLUMN is_actionable BOOLEAN DEFAULT 0",
+    "is_duplicate": "ALTER TABLE telegram_signals ADD COLUMN is_duplicate BOOLEAN DEFAULT 0"
 }
 
 
@@ -137,6 +148,7 @@ def _ensure_telegram_signal_columns():
         conn.execute(text("UPDATE telegram_signals SET source_type = COALESCE(source_type, 'chat_message')"))
         conn.execute(text("UPDATE telegram_signals SET is_comment = COALESCE(is_comment, 0)"))
         conn.execute(text("UPDATE telegram_signals SET is_actionable = COALESCE(is_actionable, 0)"))
+        conn.execute(text("UPDATE telegram_signals SET is_duplicate = COALESCE(is_duplicate, 0)"))
         conn.execute(text("UPDATE telegram_signals SET status = COALESCE(status, 'new')"))
         conn.execute(text("UPDATE telegram_signals SET review_status = COALESCE(review_status, 'unchecked')"))
         conn.execute(text("UPDATE telegram_signals SET final_lead_score = COALESCE(final_lead_score, signal_score, 0)"))

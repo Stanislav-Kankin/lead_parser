@@ -374,13 +374,17 @@ def sales_lead_keyboard(prefix: str, page: int, total_pages: int, signal, *, ext
 
     if signal_id is not None and prefix in {"tg_targets", "tg_review", "tg_ok", "tg_not_ok"}:
         if _outreach_target(signal):
-            draft_button_text = "✉️ Написать лиду по черновику" if _build_contact_link(signal) else "📝 Подготовить черновик"
-            rows.append([
-                InlineKeyboardButton(
-                    text=draft_button_text,
-                    callback_data=f"draft_msg:{signal_id}:{prefix}:{page}:{segment}",
-                )
-            ])
+            if getattr(signal, "is_person_reachable", False) and getattr(signal, "author_username", None):
+                rows.append([
+                    InlineKeyboardButton(
+                        text="✉️ Написать",
+                        callback_data=f"draft_msg:{signal_id}:{prefix}:{page}:{segment}",
+                    )
+                ])
+            else:
+                fallback_url = getattr(signal, "chat_url", None) or _build_message_link(signal)
+                if fallback_url:
+                    rows.append([InlineKeyboardButton(text="Смотреть чат →", url=fallback_url)])
         if prefix == "tg_ok":
             rows.append([
                 InlineKeyboardButton(
@@ -426,6 +430,83 @@ def _trim_text(value: str | None, limit: int = 220) -> str:
     if len(value) <= limit:
         return value or "-"
     return value[: limit - 1].rstrip() + "…"
+
+
+def _excerpt_by_words(value: str | None, limit: int = 120) -> str:
+    value = " ".join((value or "").split())
+    if len(value) <= limit:
+        return value or "-"
+    cut = value[:limit].rsplit(" ", 1)[0].strip()
+    return (cut or value[:limit]).rstrip(".,;:") + "…"
+
+
+def _time_ago(value) -> str:
+    if not value:
+        return "-"
+    now = datetime.now(timezone.utc)
+    if getattr(value, "tzinfo", None) is None:
+        value = value.replace(tzinfo=timezone.utc)
+    delta = now - value
+    minutes = max(0, int(delta.total_seconds() // 60))
+    if minutes < 60:
+        return f"{minutes} мин назад"
+    hours = minutes // 60
+    if hours < 24:
+        return f"{hours} ч назад"
+    days = hours // 24
+    return f"{days} д назад"
+
+
+def _signal_level_icon(score: int) -> str:
+    if score >= 75:
+        return "🟣"
+    if score >= 50:
+        return "🟡"
+    return "⚪"
+
+
+def _format_signal_card(signal) -> str:
+    score = int(getattr(signal, "lead_score_100", 0) or 0)
+    author_name = getattr(signal, "author_name", None) or "Без имени"
+    author_username = getattr(signal, "author_username", None)
+    username = f"@{str(author_username).lstrip('@')}" if author_username else "-"
+    chat_title = getattr(signal, "chat_title", None) or "-"
+    segment_label = _ru_segment(getattr(signal, "segment", None) or "all")
+    outreach_stage = _ru_outreach_stage(getattr(signal, "outreach_stage", None))
+    urgency = getattr(signal, "urgency", None)
+    tags = [segment_label, outreach_stage]
+    if urgency:
+        tags.append(str(urgency))
+    text = getattr(signal, "message_text", None) or getattr(signal, "text_excerpt", None) or ""
+    pain = getattr(signal, "pain_detected", None) or "-"
+    lines = [
+        f"━━ {_signal_level_icon(score)} {score} балла ━━━━━━━━━━━━",
+        "",
+        f"👤 {escape_html(author_name)}  {escape_html(username)}",
+        f"💬 Чат: {escape_html(chat_title)}",
+        "",
+        " ".join(f"[{escape_html(tag)}]" for tag in tags if tag and tag != "-"),
+        "",
+        f"   «{escape_html(_excerpt_by_words(text, 120))}»",
+        "",
+        f"📞 Боли: {escape_html(pain)}",
+        f"📅 {escape_html(_time_ago(getattr(signal, 'message_date', None)))}",
+    ]
+    if getattr(signal, "review_status", None) == "checked":
+        lines.append("<i>✓ просмотрено</i>")
+    if getattr(signal, "is_duplicate", False):
+        lines.append("⚠ Повторный контакт")
+    return "\n".join(lines)
+
+
+def _format_dashboard(stats: dict) -> str:
+    return (
+        "📊 <b>Сигналы · сейчас</b>\n\n"
+        f"🟣 Горячих: <b>{stats.get('hot', 0)}</b>\n"
+        f"🟡 Тёплых: <b>{stats.get('warm', 0)}</b>\n"
+        f"⚪ Слабых: <b>{stats.get('weak', 0)}</b>\n"
+        f"✅ Обработано сегодня: <b>{stats.get('reviewed_today', 0)}</b>"
+    )
 
 
 async def _send_or_edit(callback: CallbackQuery, text: str, reply_markup=None) -> None:
@@ -1201,6 +1282,7 @@ def format_sales_lead_card(idx: int, signal) -> str:
         chat_line = f'<a href="{escape_html(chat_url)}">{escape_html(chat_name)}</a>'
 
     profile_line = who_line if profile_url else escape_html(username_to_write)
+    duplicate_line = "\n⚠ Повторный контакт" if getattr(signal, "is_duplicate", False) else ""
 
     return (
         f"<b>{idx}. {escape_html(username)}</b>\n"
@@ -1215,10 +1297,15 @@ def format_sales_lead_card(idx: int, signal) -> str:
         f"<b>Контекст:</b> {escape_html(_trim_text(getattr(signal, 'why_actionable', None) or getattr(signal, 'conversation_type', None) or '-', 160))}\n"
         f"<b>Гипотеза боли:</b> {escape_html(pain_hypothesis)}\n"
         f"<b>Opener:</b> {escape_html(opener)}"
+        f"{duplicate_line}"
     )
 
 
 def format_signal_card(idx: int, signal) -> str:
+    return f"<b>{idx}.</b>\n{_format_signal_card(signal)}"
+
+
+def _format_signal_card_legacy(idx: int, signal) -> str:
     title = escape_html(signal.chat_title or "-")
     primary_score = getattr(signal, "final_lead_score", None) or signal.signal_score or 0
     message_type = getattr(signal, "message_type", None) or "-"

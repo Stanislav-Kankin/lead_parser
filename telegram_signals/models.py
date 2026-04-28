@@ -88,6 +88,7 @@ class TelegramSignal(Base):
     review_status = Column(String, nullable=False, default="unchecked")
     reviewed_at = Column(DateTime, nullable=True)
     is_actionable = Column(Boolean, nullable=False, default=False)
+    is_duplicate = Column(Boolean, nullable=False, default=False)
     created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
 
 

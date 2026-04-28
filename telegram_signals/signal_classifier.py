@@ -12,6 +12,14 @@ from telegram_signals.keywords import (
     PAIN_KEYWORDS,
 )
 
+
+def normalize_text(text: str) -> str:
+    text = (text or "").lower().strip().replace("ё", "е")
+    text = re.sub(r"\[([^\]]+)\]\([^)]+\)", r"\1", text)
+    text = re.sub(r"[*_`]+", "", text)
+    return re.sub(r"\s+", " ", text).strip()
+
+
 FIRST_PERSON_PAIN_PATTERNS = [
     "у нас",
     "у меня",
@@ -475,13 +483,21 @@ def _classify_contact_entity(
     return "unknown", 0, 0
 
 
-def _contains_any(text_l: str, keywords: list[str]) -> list[str]:
-    return [kw for kw in keywords if kw in text_l]
+def _contains_any(text_l: str, keywords: list[str], *, whole_word: bool = False) -> list[str]:
+    if not whole_word:
+        return [kw for kw in keywords if kw in text_l]
+    hits = []
+    for kw in keywords:
+        pattern = r"(?<![а-яёa-z])" + re.escape(normalize_text(kw)) + r"(?![а-яёa-z])"
+        if re.search(pattern, text_l, flags=re.I):
+            hits.append(kw)
+    return hits
 
 
-def _contains_pattern(text_l: str, pattern: str) -> bool:
-    if pattern in {"мне", "мой", "мои", "наш"}:
-        return bool(re.search(rf"(?<![a-zа-яё0-9]){re.escape(pattern)}(?![a-zа-яё0-9])", text_l, flags=re.I))
+def _contains_pattern(text_l: str, pattern: str, *, whole_word: bool = False) -> bool:
+    pattern = normalize_text(pattern)
+    if whole_word or pattern in {"мне", "мой", "мои", "наш"}:
+        return bool(re.search(r"(?<![а-яёa-z])" + re.escape(pattern) + r"(?![а-яёa-z])", text_l, flags=re.I))
     return pattern in text_l
 
 
@@ -513,8 +529,8 @@ def _guess_author_type(full_l: str) -> tuple[str, int, int]:
 
     owner_hits = [p for p in OWNER_CONTEXT_PATTERNS if p in full_l]
     role_hits = [p for p in OWNER_ROLE_PATTERNS if p in full_l]
-    business_hits = [p for p in BUSINESS_HINT_KEYWORDS if p in full_l]
-    contractor_hits = [p for p in CONTRACTOR_HINT_KEYWORDS if p in full_l]
+    business_hits = [p for p in BUSINESS_HINT_KEYWORDS if normalize_text(p) in full_l]
+    contractor_hits = _contains_any(full_l, CONTRACTOR_HINT_KEYWORDS, whole_word=True)
     contractor_strong_hits = [p for p in CONTRACTOR_STRONG_PATTERNS if p in full_l]
 
     owner_score += len(owner_hits) * 3
@@ -932,13 +948,13 @@ def classify_signal(
     chat_username: str | None = None,
     reply_depth: int = 0,
 ) -> dict:
-    text = text or ""
-    context_text = context_text or ""
-    conversation_text = conversation_text or ""
+    text = normalize_text(text)
+    context_text = normalize_text(context_text)
+    conversation_text = normalize_text(conversation_text)
 
-    text_l = text.lower()
-    context_l = context_text.lower()
-    conversation_l = conversation_text.lower()
+    text_l = text
+    context_l = context_text
+    conversation_l = conversation_text
     full_l = "\n".join(part for part in [text_l, context_l, conversation_l] if part)
     chat_title_l = (chat_title or "").lower()
     chat_username_l = (chat_username or "").lower()
@@ -947,8 +963,8 @@ def classify_signal(
     pain_hits = _contains_any(text_l, PAIN_KEYWORDS)
     intent_hits = _contains_any(text_l, INTENT_KEYWORDS)
     direct_hits = _contains_any(full_l, DIRECT_KEYWORDS)
-    brand_hits = _contains_any(full_l, BRAND_KEYWORDS)
-    noise_hits = _contains_any(text_l, NOISE_KEYWORDS)
+    brand_hits = _contains_any(full_l, BRAND_KEYWORDS, whole_word=True)
+    noise_hits = _contains_any(text_l, NOISE_KEYWORDS, whole_word=True)
 
     author_type_guess, owner_likelihood_score, contractor_penalty = _guess_author_type(full_l)
 
@@ -973,11 +989,15 @@ def classify_signal(
 
     participant_score = 0
     if reply_depth >= 1:
-        participant_score += 2
-    if reply_depth >= 1 and first_person_hits:
-        participant_score += 3
-    if reply_depth >= 1 and (pain_hits or marketing_pain_hits or live_help_hits):
-        participant_score += 2
+        reply_keyword_hits = bool(pain_hits or intent_hits or live_help_hits)
+        if len(text_l.split()) < 15 and not reply_keyword_hits:
+            participant_score += 1
+        else:
+            participant_score += 2
+            if first_person_hits:
+                participant_score += 3
+            if reply_keyword_hits:
+                participant_score += 5
 
     pain_score = len(pain_hits) * 3 + len(marketing_pain_hits) * 2 + first_person_pain_score + live_help_score + operational_score
     intent_score = len(intent_hits) * 4 + len(change_event_hits) * 2 + len(live_help_hits) * 2

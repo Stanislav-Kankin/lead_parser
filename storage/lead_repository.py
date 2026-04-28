@@ -1,11 +1,11 @@
 import logging
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Iterable
 
 from sqlalchemy import case, desc, or_, select
 
 from models.lead import Lead
-from storage.db import SessionLocal
+from storage.db import SeenAuthor, SessionLocal
 from utils.domain_normalizer import get_root_domain, normalize_domain
 
 logger = logging.getLogger(__name__)
@@ -107,6 +107,30 @@ def get_last_leads(limit: int = 10, only_with_contacts: bool = True) -> list[Lea
             desc(Lead.created_at),
         ).limit(limit)
         return list(session.execute(stmt).scalars().all())
+
+
+def get_seen_author(author_id: str | None) -> SeenAuthor | None:
+    if not author_id:
+        return None
+    with SessionLocal() as session:
+        return session.execute(select(SeenAuthor).where(SeenAuthor.author_id == str(author_id))).scalar_one_or_none()
+
+
+def upsert_seen_author(author_id: str | None) -> None:
+    if not author_id:
+        return
+    now = datetime.utcnow()
+    with SessionLocal() as session:
+        item = session.execute(select(SeenAuthor).where(SeenAuthor.author_id == str(author_id))).scalar_one_or_none()
+        if item is None:
+            session.add(SeenAuthor(author_id=str(author_id), last_signal_at=now, signal_count_7d=1))
+        else:
+            if item.last_signal_at and item.last_signal_at >= now - timedelta(days=7):
+                item.signal_count_7d = int(item.signal_count_7d or 0) + 1
+            else:
+                item.signal_count_7d = 1
+            item.last_signal_at = now
+        session.commit()
 
 
 

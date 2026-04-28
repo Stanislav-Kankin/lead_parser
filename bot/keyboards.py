@@ -59,7 +59,10 @@ def pagination_keyboard(prefix: str, page: int, total_pages: int, extra: str | N
     suffix = f":{extra}" if extra else ""
     if page > 0:
         row.append(InlineKeyboardButton(text="⬅️ Назад", callback_data=f"{prefix}:{page - 1}{suffix}"))
-    row.append(InlineKeyboardButton(text=f"{page + 1}/{total_pages}", callback_data="page_info"))
+    filled = round(((page + 1) / total_pages) * 10)
+    empty = 10 - filled
+    progress = "█" * filled + "░" * empty
+    row.append(InlineKeyboardButton(text=f"[{progress}] {page + 1} из {total_pages}", callback_data="page_info"))
     if page < total_pages - 1:
         row.append(InlineKeyboardButton(text="Вперёд ➡️", callback_data=f"{prefix}:{page + 1}{suffix}"))
     return InlineKeyboardMarkup(inline_keyboard=[row])

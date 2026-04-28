@@ -4,6 +4,7 @@ from datetime import datetime, timedelta, timezone
 
 from telethon.tl.types import Message
 
+from storage.lead_repository import get_seen_author, upsert_seen_author
 from telegram_signals.client import get_client, search_public_chats
 from telegram_signals.conversation.thread_builder import build_thread_views
 from telegram_signals.keywords import CHAT_DISCOVERY_KEYWORDS
@@ -259,6 +260,17 @@ async def collect_signals(
                     continue
 
                 kept_signals += 1
+                author_id = str(msg.sender_id) if getattr(msg, "sender_id", None) is not None else None
+                seen_author = get_seen_author(author_id)
+                is_duplicate = False
+                if seen_author and seen_author.last_signal_at:
+                    last_signal_at = seen_author.last_signal_at
+                    if last_signal_at.tzinfo is not None:
+                        last_signal_at = last_signal_at.replace(tzinfo=None)
+                    is_duplicate = (
+                        last_signal_at >= datetime.utcnow() - timedelta(days=7)
+                        and int(seen_author.signal_count_7d or 0) > 2
+                    )
 
                 collected_items.append({
                     "source_query": segment,
@@ -269,7 +281,7 @@ async def collect_signals(
                     "chat_url": _chat_url(chat),
                     "message_id": msg.id,
                     "message_date": msg.date,
-                    "author_id": str(msg.sender_id) if getattr(msg, "sender_id", None) is not None else None,
+                    "author_id": author_id,
                     "author_name": _author_name(msg),
                     "author_username": _author_username(msg),
                     "message_text": text,
@@ -325,9 +337,12 @@ async def collect_signals(
                     "reviewed_at": None,
                     "is_actionable": signal.get("is_actionable", 0),
                     "status": "new",
+                    "is_duplicate": is_duplicate,
                 })
 
         save_stats = save_signals(collected_items) if collected_items else {"created": 0, "updated": 0}
+        for item in collected_items:
+            upsert_seen_author(item.get("author_id"))
 
         logger.info(
             "[telegram_signals] done segment=%s chats=%s messages=%s kept=%s created=%s updated=%s",
