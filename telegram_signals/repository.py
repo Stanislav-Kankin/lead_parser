@@ -7,7 +7,7 @@ from datetime import datetime
 from sqlalchemy import case, desc, func, or_, select
 
 from storage.db import SessionLocal
-from .models import SearchProfile, TelegramSignal
+from .models import SearchProfile, TelegramSignal, TelegramSignalComment
 
 
 AD_TEXT_EXCLUDE_PATTERNS = (
@@ -298,6 +298,59 @@ def get_signal_by_id(signal_id: int) -> TelegramSignal | None:
         return session.get(TelegramSignal, signal_id)
 
 
+def add_signal_comment(signal_id: int, comment: str, author: str = "dashboard") -> bool:
+    text = (comment or "").strip()
+    if not text:
+        return False
+    with SessionLocal() as session:
+        item = session.get(TelegramSignal, signal_id)
+        if item is None:
+            return False
+        item.comment = text
+        session.add(
+            TelegramSignalComment(
+                signal_id=signal_id,
+                comment=text,
+                author=author,
+            )
+        )
+        session.commit()
+        return True
+
+
+def get_signal_comments(signal_id: int, limit: int | None = None) -> list[TelegramSignalComment]:
+    with SessionLocal() as session:
+        stmt = (
+            select(TelegramSignalComment)
+            .where(TelegramSignalComment.signal_id == signal_id)
+            .order_by(desc(TelegramSignalComment.created_at), desc(TelegramSignalComment.id))
+        )
+        if limit:
+            stmt = stmt.limit(limit)
+        return list(session.execute(stmt).scalars().all())
+
+
+def get_signal_comments_map(signal_ids: list[int], limit_per_signal: int = 3) -> dict[int, list[TelegramSignalComment]]:
+    if not signal_ids:
+        return {}
+    with SessionLocal() as session:
+        stmt = (
+            select(TelegramSignalComment)
+            .where(TelegramSignalComment.signal_id.in_(signal_ids))
+            .order_by(
+                TelegramSignalComment.signal_id,
+                desc(TelegramSignalComment.created_at),
+                desc(TelegramSignalComment.id),
+            )
+        )
+        result: dict[int, list[TelegramSignalComment]] = {signal_id: [] for signal_id in signal_ids}
+        for comment in session.execute(stmt).scalars().all():
+            bucket = result.setdefault(comment.signal_id, [])
+            if len(bucket) < limit_per_signal:
+                bucket.append(comment)
+        return result
+
+
 def set_signal_review_status(signal_id: int, review_status: str) -> bool:
     with SessionLocal() as session:
         item = session.get(TelegramSignal, signal_id)
@@ -332,7 +385,16 @@ def update_signal_crm(signal_id: int, *, status: str | None = None, crm_tag: str
         if crm_tag is not None:
             item.crm_tag = crm_tag or None
         if comment is not None:
-            item.comment = comment.strip() or None
+            comment_text = comment.strip()
+            if comment_text:
+                item.comment = comment_text
+                session.add(
+                    TelegramSignalComment(
+                        signal_id=signal_id,
+                        comment=comment_text,
+                        author="dashboard",
+                    )
+                )
         if review_status:
             item.review_status = review_status
             item.reviewed_at = datetime.utcnow()

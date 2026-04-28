@@ -16,6 +16,7 @@ from telegram_signals.keywords import SEGMENT_LABELS
 from telegram_signals.repository import (
     count_signals,
     get_search_profile,
+    get_signal_comments_map,
     get_signals,
     list_search_profiles,
     save_search_profile,
@@ -432,6 +433,7 @@ def telegram_signals_dashboard(
         offset=(page - 1) * per_page,
         **filter_kwargs,
     )
+    comments_by_signal = get_signal_comments_map([item.id for item in items], limit_per_signal=5)
 
     contacted_count = sum(1 for item in items if item.status == "contacted")
     active_count = sum(1 for item in items if item.status in {"new", "reviewed", None})
@@ -453,6 +455,22 @@ def telegram_signals_dashboard(
         tag_labels = [CRM_TAG_LABELS.get(tag, tag) for tag in selected_tags]
         tag_label = ", ".join(tag_labels) if tag_labels else "Без тега"
         author = item.author_name or item.author_username or "Без имени"
+
+        comment_items = comments_by_signal.get(item.id, [])
+        comment_history = ""
+        if comment_items:
+            comment_history = (
+                "<section class='comment-history'>"
+                "<div class='section-title'>История комментариев</div>"
+                + "".join(
+                    "<div class='comment-item'>"
+                    f"<time>{escape(format_msk(comment.created_at))}</time>"
+                    f"<p>{escape(comment.comment)}</p>"
+                    "</div>"
+                    for comment in comment_items
+                )
+                + "</section>"
+            )
 
         actions = [
             _action_form(item.id, "ОК", review_status="ok", tone="ok"),
@@ -514,15 +532,17 @@ def telegram_signals_dashboard(
                     {"".join(f"<option value='{escape(value)}' {_selected(item.status or 'new', value)}>{escape(label)}</option>" for value, label in STATUS_LABELS.items())}
                   </select>
                 </label>
-                <fieldset class="tag-field">
-                  <legend>Теги</legend>
-                  {"".join(f"<label class='tag-check'><input type='checkbox' name='crm_tag' value='{escape(value)}' {_checked(value in selected_tags)}> {escape(label)}</label>" for value, label in CRM_TAG_LABELS.items())}
-                </fieldset>
+                <label>Теги
+                  <select name="crm_tag" multiple class="tag-select">
+                    {"".join(f"<option value='{escape(value)}' {'selected' if value in selected_tags else ''}>{escape(label)}</option>" for value, label in CRM_TAG_LABELS.items())}
+                  </select>
+                </label>
                 <label class="comment-field">Комментарий
-                  <textarea name="comment" placeholder="Что важно помнить по лиду">{escape(item.comment or "")}</textarea>
+                  <textarea name="comment" placeholder="Добавить новую заметку по лиду"></textarea>
                 </label>
                 <button type="submit" class="btn primary">Сохранить CRM</button>
               </form>
+              {comment_history}
             </article>
             """
         )
@@ -946,22 +966,30 @@ def telegram_signals_dashboard(
           padding: 8px 10px;
           font: inherit;
         }}
-        .tag-field {{
-          border: 1px solid #cbd5e1;
-          border-radius: 7px;
-          padding: 8px 10px;
-          margin: 0;
+        .tag-select {{
+          height: 38px;
+          overflow: hidden;
         }}
-        .tag-field legend {{ color: var(--muted); font-size: 12px; padding: 0 4px; }}
-        .tag-check {{
-          display: inline-flex;
-          align-items: center;
-          gap: 6px;
-          margin: 3px 10px 3px 0;
-          color: #344054;
-          font-size: 13px;
+        .tag-select:focus {{
+          height: 132px;
+          overflow: auto;
         }}
-        .tag-check input {{ width: 15px; height: 15px; }}
+        .comment-history {{
+          border-top: 1px solid var(--line);
+          margin-top: 12px;
+          padding-top: 12px;
+        }}
+        .comment-item {{
+          border-left: 3px solid #cbd5e1;
+          margin-top: 8px;
+          padding: 2px 0 2px 10px;
+        }}
+        .comment-item time {{
+          display: block;
+          color: var(--muted);
+          font-size: 12px;
+          margin-bottom: 3px;
+        }}
         .empty {{ background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: 28px; color: var(--muted); }}
         @media (max-width: 1100px) {{
           .shell {{ display: block; }}

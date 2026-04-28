@@ -92,6 +92,16 @@ class TelegramSignal(Base):
     created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
 
 
+class TelegramSignalComment(Base):
+    __tablename__ = "telegram_signal_comments"
+
+    id = Column(Integer, primary_key=True)
+    signal_id = Column(Integer, nullable=False, index=True)
+    comment = Column(Text, nullable=False)
+    author = Column(String, nullable=True, default="dashboard")
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+
+
 class SearchProfile(Base):
     __tablename__ = "search_profiles"
 

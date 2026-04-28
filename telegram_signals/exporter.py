@@ -12,6 +12,7 @@ from telegram_signals.repository import (
     get_market_intelligence,
     get_review_leads,
     get_reviewed_leads,
+    get_signal_comments_map,
     get_signals,
     get_target_leads,
 )
@@ -66,6 +67,7 @@ def export_signals_to_xlsx(kind: str = "actionable") -> Path:
         items = get_signals(limit=None, lead_fit_in=["target", "review"])
         suffix = "sales_leads"
         title = "sales_leads"
+    comments_by_signal = get_signal_comments_map([item.id for item in items], limit_per_signal=20)
 
     wb = Workbook()
     ws = wb.active
@@ -112,6 +114,7 @@ def export_signals_to_xlsx(kind: str = "actionable") -> Path:
         "status",
         "crm_tag",
         "comment",
+        "comment_history",
         "review_status",
         "reviewed_at",
     ]
@@ -161,6 +164,10 @@ def export_signals_to_xlsx(kind: str = "actionable") -> Path:
             item.status or "",
             item.crm_tag or "",
             item.comment or "",
+            "\n\n".join(
+                f"{format_msk(comment.created_at)}: {comment.comment}"
+                for comment in comments_by_signal.get(item.id, [])
+            ),
             item.review_status or "",
             format_msk(item.reviewed_at),
         ])

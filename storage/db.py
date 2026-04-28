@@ -6,7 +6,7 @@ from sqlalchemy.orm import sessionmaker
 
 from models.lead import Base
 from telegram_signals.keywords import CHAT_BAD_HINTS, CHAT_DISCOVERY_KEYWORDS, CHAT_GOOD_HINTS, SEGMENT_LABELS
-from telegram_signals.models import SearchProfile, TelegramSignal  # noqa: F401
+from telegram_signals.models import SearchProfile, TelegramSignal, TelegramSignalComment  # noqa: F401
 
 DATABASE_URL = os.getenv("DATABASE_URL", "sqlite:///./leads.db")
 
