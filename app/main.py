@@ -178,6 +178,9 @@ def _run_collect_job(profile_id: int | None = None) -> None:
             }
         )
 
+    working_before = count_signals(lead_fit_in=["target", "review"])
+    raw_before = count_signals()
+
     async def runner() -> dict:
         totals = {"created": 0, "updated": 0, "scanned_chats": 0, "scanned_messages": 0, "kept_signals": 0}
         profiles = [get_search_profile(profile_id)] if profile_id else list_search_profiles(active_only=True)
@@ -196,6 +199,12 @@ def _run_collect_job(profile_id: int | None = None) -> None:
 
     try:
         result = asyncio.run(runner())
+        working_after = count_signals(lead_fit_in=["target", "review"])
+        raw_after = count_signals()
+        result["created_working"] = max(0, working_after - working_before)
+        result["created_raw"] = max(0, raw_after - raw_before)
+        result["total_working"] = working_after
+        result["total_raw"] = raw_after
         with JOB_LOCK:
             DASHBOARD_JOB.update(
                 {
@@ -408,6 +417,7 @@ def telegram_signals_dashboard(
     crm_tag: str = "",
     review_status: str = "",
     lead_category: str = "",
+    view: str = "work",
     hot: bool = False,
     page: int = 1,
     per_page: int = 50,
@@ -415,8 +425,9 @@ def telegram_signals_dashboard(
     score = 80 if hot and min_score < 80 else min_score
     per_page = per_page if per_page in {10, 50, 200} else 50
     page = max(1, page)
+    is_raw_view = view == "raw"
     filter_kwargs = {
-        "lead_fit_in": ["target", "review"],
+        "lead_fit_in": None if is_raw_view else ["target", "review"],
         "min_score": score or None,
         "marketplace": marketplace or None,
         "niche": niche or None,
@@ -436,7 +447,7 @@ def telegram_signals_dashboard(
     comments_by_signal = get_signal_comments_map([item.id for item in items], limit_per_signal=5)
 
     contacted_count = sum(1 for item in items if item.status == "contacted")
-    active_count = sum(1 for item in items if item.status in {"new", "reviewed", None})
+    active_count = count_signals(lead_fit_in=["target", "review"], status="new") + count_signals(lead_fit_in=["target", "review"], status="reviewed")
     hot_count = sum(1 for item in items if (item.lead_score_100 or 0) >= 80)
     avg_score = round(sum((item.lead_score_100 or 0) for item in items) / len(items)) if items else 0
 
@@ -532,11 +543,15 @@ def telegram_signals_dashboard(
                     {"".join(f"<option value='{escape(value)}' {_selected(item.status or 'new', value)}>{escape(label)}</option>" for value, label in STATUS_LABELS.items())}
                   </select>
                 </label>
-                <label>Теги
-                  <select name="crm_tag" multiple class="tag-select">
-                    {"".join(f"<option value='{escape(value)}' {'selected' if value in selected_tags else ''}>{escape(label)}</option>" for value, label in CRM_TAG_LABELS.items())}
-                  </select>
-                </label>
+                <div class="tag-dropdown">
+                  <span>Теги</span>
+                  <details>
+                    <summary>{escape(tag_label)}</summary>
+                    <div class="tag-menu">
+                      {"".join(f"<label class='tag-option'><input type='checkbox' name='crm_tag' value='{escape(value)}' {_checked(value in selected_tags)}> {escape(label)}</label>" for value, label in CRM_TAG_LABELS.items())}
+                    </div>
+                  </details>
+                </div>
                 <label class="comment-field">Комментарий
                   <textarea name="comment" placeholder="Добавить новую заметку по лиду"></textarea>
                 </label>
@@ -573,6 +588,7 @@ def telegram_signals_dashboard(
         f"<option value='{escape(value)}' {_selected(crm_tag, value)}>{escape(label)}</option>"
         for value, label in [("", "Все"), *CRM_TAG_LABELS.items()]
     )
+    view_hidden = "<input type='hidden' name='view' value='raw'>" if is_raw_view else ""
     per_page_options = "".join(
         f"<option value='{value}' {_selected(str(per_page), str(value))}>{value}</option>"
         for value in [10, 50, 200]
@@ -585,6 +601,7 @@ def telegram_signals_dashboard(
         "crm_tag": crm_tag,
         "review_status": review_status,
         "lead_category": lead_category,
+        "view": "raw" if is_raw_view else "",
         "hot": "true" if hot else "",
         "per_page": per_page,
     }
@@ -602,9 +619,11 @@ def telegram_signals_dashboard(
     elif job["last_result"]:
         result = job["last_result"]
         job_text = (
-            f"Последний сбор: +{result.get('created', 0)} новых, "
+            f"Последний сбор: +{result.get('created', 0)} новых всего, "
+            f"+{result.get('created_working', 0)} в рабочую базу, "
             f"{result.get('updated', 0)} обновлено, "
             f"{result.get('scanned_messages', 0)} сообщений. "
+            f"Сырья в базе: {result.get('total_raw', 0)}. "
             f"Завершен: {job.get('last_finished_at') or '-'}"
         )
         job_class = "job-ok"
@@ -622,6 +641,7 @@ def telegram_signals_dashboard(
         ("Встречи", "/telegram-signals?status=meeting_booked", _count_signals(status="meeting_booked")),
         ("Архив", "/telegram-signals?status=dead", _count_signals(status="dead")),
         ("Горячие", "/telegram-signals?hot=true", _count_signals(min_score=80)),
+        ("Сырье", "/telegram-signals?view=raw", count_signals()),
     ]
     quick_nav = "".join(
         f"<a class='quick-link' href='{escape(url)}'><span>{escape(label)}</span><b>{count}</b></a>"
@@ -634,6 +654,7 @@ def telegram_signals_dashboard(
                 ("На проверку", "/telegram-signals?review_status=unchecked", _count_signals(review_status="unchecked")),
                 ("ОК", "/telegram-signals?review_status=ok", _count_signals(review_status="ok")),
                 ("Не ОК", "/telegram-signals?review_status=not_ok", _count_signals(review_status="not_ok")),
+                ("Сырье", "/telegram-signals?view=raw", count_signals()),
             ],
         ),
         (
@@ -966,14 +987,55 @@ def telegram_signals_dashboard(
           padding: 8px 10px;
           font: inherit;
         }}
-        .tag-select {{
-          height: 38px;
+        .tag-dropdown {{
+          display: grid;
+          gap: 5px;
+          color: var(--muted);
+          font-size: 12px;
+        }}
+        .tag-dropdown details {{
+          position: relative;
+        }}
+        .tag-dropdown summary {{
+          display: flex;
+          align-items: center;
+          min-height: 38px;
+          border: 1px solid #cbd5e1;
+          border-radius: 7px;
+          background: #fff;
+          color: var(--text);
+          padding: 0 10px;
+          cursor: pointer;
+          white-space: nowrap;
           overflow: hidden;
+          text-overflow: ellipsis;
         }}
-        .tag-select:focus {{
-          height: 132px;
+        .tag-menu {{
+          position: absolute;
+          z-index: 20;
+          top: 42px;
+          left: 0;
+          width: 240px;
+          max-height: 220px;
           overflow: auto;
+          border: 1px solid #cbd5e1;
+          border-radius: 8px;
+          background: #fff;
+          box-shadow: 0 12px 28px rgba(16, 24, 40, .16);
+          padding: 8px;
         }}
+        .tag-option {{
+          display: flex;
+          align-items: center;
+          gap: 8px;
+          min-height: 30px;
+          padding: 4px 6px;
+          border-radius: 6px;
+          color: #344054;
+          font-size: 13px;
+        }}
+        .tag-option:hover {{ background: #f2f4f7; }}
+        .tag-option input {{ width: 15px; height: 15px; }}
         .comment-history {{
           border-top: 1px solid var(--line);
           margin-top: 12px;
@@ -1039,6 +1101,7 @@ def telegram_signals_dashboard(
         <div class="exports">{export_links}</div>
 
         <form class="filters">
+          {view_hidden}
           <label>Score от <input name="min_score" type="number" value="{score}" min="0" max="100"></label>
           <label>Площадка <select name="marketplace">{marketplace_options}</select></label>
           <label>Статус <select name="status">{status_options}</select></label>
