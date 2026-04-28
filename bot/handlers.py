@@ -499,6 +499,24 @@ def _format_signal_card(signal) -> str:
     return "\n".join(lines)
 
 
+def _format_sales_signal_card(idx: int, signal) -> str:
+    opener = _trim_text(
+        getattr(signal, "opener_expert", None)
+        or getattr(signal, "opener_soft", None)
+        or getattr(signal, "recommended_opener", None)
+        or "-",
+        260,
+    )
+    icp = getattr(signal, "likely_icp", None) or "-"
+    marketplace = getattr(signal, "marketplace", None) or "-"
+    return (
+        f"<b>{idx}.</b>\n"
+        f"{_format_signal_card(signal)}\n\n"
+        f"ICP: <b>{escape_html(icp)}</b> · MP: <b>{escape_html(marketplace)}</b>\n"
+        f"Заход: {escape_html(opener)}"
+    )
+
+
 def _format_dashboard(stats: dict) -> str:
     return (
         "📊 <b>Сигналы · сейчас</b>\n\n"
@@ -1254,6 +1272,10 @@ def format_lead_card(idx: int, lead: dict) -> str:
 
 
 def format_sales_lead_card(idx: int, signal) -> str:
+    return _format_sales_signal_card(idx, signal)
+
+
+def _format_sales_lead_card_legacy(idx: int, signal) -> str:
     username = _lead_identity(signal)
     pain_hypothesis = _build_lead_summary(signal)
     context = _trim_text(getattr(signal, "text_excerpt", None) or getattr(signal, "message_text", None) or "-", 280)

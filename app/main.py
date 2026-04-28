@@ -239,11 +239,13 @@ def update_signal_status(signal_id: int, request: Request, status: str | None = 
 
 @app.post("/telegram-signals/{signal_id}/crm")
 async def update_signal_crm_from_dashboard(signal_id: int, request: Request):
-    form = {key: values[-1] for key, values in parse_qs((await request.body()).decode("utf-8")).items()}
+    raw_form = parse_qs((await request.body()).decode("utf-8"))
+    form = {key: values[-1] for key, values in raw_form.items()}
+    crm_tags = ",".join(tag for tag in raw_form.get("crm_tag", []) if tag)
     update_signal_crm(
         signal_id,
         status=str(form.get("status") or ""),
-        crm_tag=str(form.get("crm_tag") or ""),
+        crm_tag=crm_tags,
         comment=str(form.get("comment") or ""),
         review_status=str(form.get("review_status") or "") or None,
     )
@@ -263,6 +265,10 @@ def export_telegram_signals(kind: str = "all"):
 
 def _profile_form_value(form: dict, key: str, default: str = "") -> str:
     return str(form.get(key) or default).strip()
+
+
+def _split_tags(value: str | None) -> list[str]:
+    return [tag.strip() for tag in (value or "").split(",") if tag.strip()]
 
 
 @app.post("/telegram-signals/settings")
@@ -443,7 +449,9 @@ def telegram_signals_dashboard(
         category = CATEGORY_LABELS.get(item.lead_category or "", item.lead_category or "Не определено")
         status_label = STATUS_LABELS.get(item.status or "new", item.status or "Новый")
         review_label = REVIEW_LABELS.get(item.review_status or "unchecked", item.review_status or "Не разобран")
-        tag_label = CRM_TAG_LABELS.get(item.crm_tag or "", item.crm_tag or "Без тега")
+        selected_tags = set(_split_tags(item.crm_tag))
+        tag_labels = [CRM_TAG_LABELS.get(tag, tag) for tag in selected_tags]
+        tag_label = ", ".join(tag_labels) if tag_labels else "Без тега"
         author = item.author_name or item.author_username or "Без имени"
 
         actions = [
@@ -506,12 +514,10 @@ def telegram_signals_dashboard(
                     {"".join(f"<option value='{escape(value)}' {_selected(item.status or 'new', value)}>{escape(label)}</option>" for value, label in STATUS_LABELS.items())}
                   </select>
                 </label>
-                <label>Тег
-                  <select name="crm_tag">
-                    <option value="" {_selected(item.crm_tag or "", "")}>Без тега</option>
-                    {"".join(f"<option value='{escape(value)}' {_selected(item.crm_tag or '', value)}>{escape(label)}</option>" for value, label in CRM_TAG_LABELS.items())}
-                  </select>
-                </label>
+                <fieldset class="tag-field">
+                  <legend>Теги</legend>
+                  {"".join(f"<label class='tag-check'><input type='checkbox' name='crm_tag' value='{escape(value)}' {_checked(value in selected_tags)}> {escape(label)}</label>" for value, label in CRM_TAG_LABELS.items())}
+                </fieldset>
                 <label class="comment-field">Комментарий
                   <textarea name="comment" placeholder="Что важно помнить по лиду">{escape(item.comment or "")}</textarea>
                 </label>
@@ -940,6 +946,22 @@ def telegram_signals_dashboard(
           padding: 8px 10px;
           font: inherit;
         }}
+        .tag-field {{
+          border: 1px solid #cbd5e1;
+          border-radius: 7px;
+          padding: 8px 10px;
+          margin: 0;
+        }}
+        .tag-field legend {{ color: var(--muted); font-size: 12px; padding: 0 4px; }}
+        .tag-check {{
+          display: inline-flex;
+          align-items: center;
+          gap: 6px;
+          margin: 3px 10px 3px 0;
+          color: #344054;
+          font-size: 13px;
+        }}
+        .tag-check input {{ width: 15px; height: 15px; }}
         .empty {{ background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: 28px; color: var(--muted); }}
         @media (max-width: 1100px) {{
           .shell {{ display: block; }}

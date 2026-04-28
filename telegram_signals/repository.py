@@ -140,7 +140,14 @@ def get_signals(
         if status_not:
             stmt = stmt.where(TelegramSignal.status != status_not)
         if crm_tag:
-            stmt = stmt.where(TelegramSignal.crm_tag == crm_tag)
+            stmt = stmt.where(
+                or_(
+                    TelegramSignal.crm_tag == crm_tag,
+                    TelegramSignal.crm_tag.like(f"{crm_tag},%"),
+                    TelegramSignal.crm_tag.like(f"%,{crm_tag}"),
+                    TelegramSignal.crm_tag.like(f"%,{crm_tag},%"),
+                )
+            )
         if min_score is not None:
             stmt = stmt.where(TelegramSignal.lead_score_100 >= min_score)
         if marketplace:
@@ -197,7 +204,14 @@ def count_signals(
         if status:
             stmt = stmt.where(TelegramSignal.status == status)
         if crm_tag:
-            stmt = stmt.where(TelegramSignal.crm_tag == crm_tag)
+            stmt = stmt.where(
+                or_(
+                    TelegramSignal.crm_tag == crm_tag,
+                    TelegramSignal.crm_tag.like(f"{crm_tag},%"),
+                    TelegramSignal.crm_tag.like(f"%,{crm_tag}"),
+                    TelegramSignal.crm_tag.like(f"%,{crm_tag},%"),
+                )
+            )
         if min_score is not None:
             stmt = stmt.where(TelegramSignal.lead_score_100 >= min_score)
         if marketplace:
