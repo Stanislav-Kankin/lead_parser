@@ -110,6 +110,7 @@ def get_signals(
     review_status_in: list[str] | None = None,
     status: str | None = None,
     status_not: str | None = None,
+    crm_tag: str | None = None,
     min_score: int | None = None,
     marketplace: str | None = None,
     niche: str | None = None,
@@ -137,6 +138,8 @@ def get_signals(
             stmt = stmt.where(TelegramSignal.status == status)
         if status_not:
             stmt = stmt.where(TelegramSignal.status != status_not)
+        if crm_tag:
+            stmt = stmt.where(TelegramSignal.crm_tag == crm_tag)
         if min_score is not None:
             stmt = stmt.where(TelegramSignal.lead_score_100 >= min_score)
         if marketplace:
@@ -263,6 +266,24 @@ def set_signal_status(signal_id: int, status: str, *, review_status: str | None 
         if item is None:
             return False
         item.status = status
+        if review_status:
+            item.review_status = review_status
+            item.reviewed_at = datetime.utcnow()
+        session.commit()
+        return True
+
+
+def update_signal_crm(signal_id: int, *, status: str | None = None, crm_tag: str | None = None, comment: str | None = None, review_status: str | None = None) -> bool:
+    with SessionLocal() as session:
+        item = session.get(TelegramSignal, signal_id)
+        if item is None:
+            return False
+        if status is not None:
+            item.status = status
+        if crm_tag is not None:
+            item.crm_tag = crm_tag or None
+        if comment is not None:
+            item.comment = comment.strip() or None
         if review_status:
             item.review_status = review_status
             item.reviewed_at = datetime.utcnow()

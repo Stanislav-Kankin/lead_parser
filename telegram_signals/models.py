@@ -83,6 +83,8 @@ class TelegramSignal(Base):
     opener_sales = Column(Text, nullable=True)
 
     status = Column(String, nullable=False, default="new")
+    crm_tag = Column(String, nullable=True)
+    comment = Column(Text, nullable=True)
     review_status = Column(String, nullable=False, default="unchecked")
     reviewed_at = Column(DateTime, nullable=True)
     is_actionable = Column(Boolean, nullable=False, default=False)

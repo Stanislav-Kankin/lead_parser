@@ -5,14 +5,16 @@ import logging
 from datetime import datetime
 from html import escape
 from threading import Lock
-from urllib.parse import urlencode
+from urllib.parse import parse_qs, urlencode
 
 from fastapi import BackgroundTasks, FastAPI, Request
-from fastapi.responses import HTMLResponse, RedirectResponse
+from fastapi.responses import FileResponse, HTMLResponse, RedirectResponse
 
 from storage.db import init_db
-from telegram_signals.repository import get_signals, set_signal_review_status, set_signal_status
+from telegram_signals.exporter import export_signals_to_xlsx
+from telegram_signals.repository import get_signals, set_signal_review_status, set_signal_status, update_signal_crm
 from telegram_signals.service import collect_signals
+from utils.time_format import format_msk
 
 app = FastAPI(title="Telegram Signals")
 logger = logging.getLogger(__name__)
@@ -34,6 +36,15 @@ STATUS_LABELS = {
     "warm": "Теплый",
     "meeting_booked": "Встреча",
     "dead": "Архив",
+}
+
+CRM_TAG_LABELS = {
+    "hot": "Горячий",
+    "warm": "Теплый",
+    "cold": "Холодный",
+    "meeting": "Назначена встреча",
+    "paused": "Пауза",
+    "stopped": "Прекратили общение",
 }
 
 REVIEW_LABELS = {
@@ -134,7 +145,7 @@ def _run_collect_job() -> None:
         DASHBOARD_JOB.update(
             {
                 "running": True,
-                "last_started_at": datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S"),
+                "last_started_at": format_msk(datetime.utcnow()),
                 "last_finished_at": None,
                 "last_error": None,
                 "last_result": None,
@@ -155,7 +166,7 @@ def _run_collect_job() -> None:
             DASHBOARD_JOB.update(
                 {
                     "running": False,
-                    "last_finished_at": datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S"),
+                    "last_finished_at": format_msk(datetime.utcnow()),
                     "last_error": None,
                     "last_result": result,
                 }
@@ -166,7 +177,7 @@ def _run_collect_job() -> None:
             DASHBOARD_JOB.update(
                 {
                     "running": False,
-                    "last_finished_at": datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S"),
+                    "last_finished_at": format_msk(datetime.utcnow()),
                     "last_error": str(exc),
                     "last_result": None,
                 }
@@ -191,12 +202,37 @@ def update_signal_status(signal_id: int, request: Request, status: str | None = 
     return RedirectResponse(_return_url(request), status_code=303)
 
 
+@app.post("/telegram-signals/{signal_id}/crm")
+async def update_signal_crm_from_dashboard(signal_id: int, request: Request):
+    form = {key: values[-1] for key, values in parse_qs((await request.body()).decode("utf-8")).items()}
+    update_signal_crm(
+        signal_id,
+        status=str(form.get("status") or ""),
+        crm_tag=str(form.get("crm_tag") or ""),
+        comment=str(form.get("comment") or ""),
+        review_status=str(form.get("review_status") or "") or None,
+    )
+    return RedirectResponse(_return_url(request), status_code=303)
+
+
+@app.get("/telegram-signals/export")
+def export_telegram_signals(kind: str = "all"):
+    allowed = {"all", "ok", "not_ok", "review", "target", "raw", "actionable"}
+    file_path = export_signals_to_xlsx(kind if kind in allowed else "all")
+    return FileResponse(
+        file_path,
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        filename=file_path.name,
+    )
+
+
 @app.get("/telegram-signals", response_class=HTMLResponse)
 def telegram_signals_dashboard(
     min_score: int = 0,
     marketplace: str = "",
     niche: str = "",
     status: str = "",
+    crm_tag: str = "",
     review_status: str = "",
     lead_category: str = "",
     hot: bool = False,
@@ -209,6 +245,7 @@ def telegram_signals_dashboard(
         marketplace=marketplace or None,
         niche=niche or None,
         status=status or None,
+        crm_tag=crm_tag or None,
         review_status=review_status or None,
         lead_category=lead_category or None,
     )
@@ -229,6 +266,7 @@ def telegram_signals_dashboard(
         category = CATEGORY_LABELS.get(item.lead_category or "", item.lead_category or "Не определено")
         status_label = STATUS_LABELS.get(item.status or "new", item.status or "Новый")
         review_label = REVIEW_LABELS.get(item.review_status or "unchecked", item.review_status or "Не разобран")
+        tag_label = CRM_TAG_LABELS.get(item.crm_tag or "", item.crm_tag or "Без тега")
         author = item.author_name or item.author_username or "Без имени"
 
         actions = [
@@ -252,7 +290,7 @@ def telegram_signals_dashboard(
             <article class="lead-card">
               <div class="lead-top">
                 <div>
-                  <div class="meta">{escape(str(item.message_date)[:16] if item.message_date else "")} · {escape(item.chat_title or "")}</div>
+                  <div class="meta">{escape(format_msk(item.message_date))} · {escape(item.chat_title or "")}</div>
                   <h2>{escape(author)}</h2>
                 </div>
                 <div class="score {score_class}">{score_value}</div>
@@ -260,6 +298,7 @@ def telegram_signals_dashboard(
 
               <div class="badges">
                 <span>{escape(status_label)}</span>
+                <span>{escape(tag_label)}</span>
                 <span>{escape(review_label)}</span>
                 <span>{escape(item.marketplace or "MP не указан")}</span>
                 <span>{escape(item.niche or "ниша не указана")}</span>
@@ -283,6 +322,23 @@ def telegram_signals_dashboard(
                 <div class="actions">{"".join(actions)}</div>
                 <div class="links">{"".join(links)}</div>
               </div>
+              <form method="post" action="/telegram-signals/{item.id}/crm" class="crm-form">
+                <label>Статус
+                  <select name="status">
+                    {"".join(f"<option value='{escape(value)}' {_selected(item.status or 'new', value)}>{escape(label)}</option>" for value, label in STATUS_LABELS.items())}
+                  </select>
+                </label>
+                <label>Тег
+                  <select name="crm_tag">
+                    <option value="" {_selected(item.crm_tag or "", "")}>Без тега</option>
+                    {"".join(f"<option value='{escape(value)}' {_selected(item.crm_tag or '', value)}>{escape(label)}</option>" for value, label in CRM_TAG_LABELS.items())}
+                  </select>
+                </label>
+                <label class="comment-field">Комментарий
+                  <textarea name="comment" placeholder="Что важно помнить по лиду">{escape(item.comment or "")}</textarea>
+                </label>
+                <button type="submit" class="btn primary">Сохранить CRM</button>
+              </form>
             </article>
             """
         )
@@ -308,6 +364,10 @@ def telegram_signals_dashboard(
     category_options = "".join(
         f"<option value='{escape(value)}' {_selected(lead_category, value)}>{escape(label)}</option>"
         for value, label in [("", "Все"), *CATEGORY_LABELS.items()]
+    )
+    tag_options = "".join(
+        f"<option value='{escape(value)}' {_selected(crm_tag, value)}>{escape(label)}</option>"
+        for value, label in [("", "Все"), *CRM_TAG_LABELS.items()]
     )
     job = dict(DASHBOARD_JOB)
     if job["running"]:
@@ -343,6 +403,10 @@ def telegram_signals_dashboard(
     quick_nav = "".join(
         f"<a class='quick-link' href='{escape(url)}'><span>{escape(label)}</span><b>{count}</b></a>"
         for label, url, count in quick_links
+    )
+    export_links = "".join(
+        f"<a class='export-link' href='/telegram-signals/export?kind={escape(kind)}'>{escape(label)}</a>"
+        for kind, label in [("all", "Excel: вся база"), ("ok", "Excel: только ОК"), ("not_ok", "Excel: только не ОК")]
     )
 
     return f"""
@@ -431,7 +495,7 @@ def telegram_signals_dashboard(
           top: 0;
           z-index: 5;
           display: grid;
-          grid-template-columns: 100px 160px 160px 180px 180px 1fr auto auto;
+          grid-template-columns: 100px 150px 150px 170px 170px 180px 1fr auto auto;
           gap: 10px;
           align-items: end;
           background: rgba(246, 248, 251, .94);
@@ -520,6 +584,18 @@ def telegram_signals_dashboard(
           text-align: center;
           color: #475467;
         }}
+        .exports {{ display: flex; flex-wrap: wrap; gap: 8px; margin: 0 0 14px; }}
+        .export-link {{
+          display: inline-flex;
+          align-items: center;
+          min-height: 34px;
+          border: 1px solid #bbf7d0;
+          border-radius: 7px;
+          background: #f0fdf4;
+          color: #166534;
+          padding: 0 12px;
+          text-decoration: none;
+        }}
         .lead-list {{ display: grid; gap: 14px; }}
         .lead-card {{
           background: var(--panel);
@@ -578,6 +654,24 @@ def telegram_signals_dashboard(
         }}
         .actions, .links {{ display: flex; flex-wrap: wrap; gap: 8px; }}
         .inline-form {{ display: inline; margin: 0; }}
+        .crm-form {{
+          display: grid;
+          grid-template-columns: 160px 180px minmax(260px, 1fr) auto;
+          gap: 10px;
+          align-items: end;
+          border-top: 1px solid var(--line);
+          margin-top: 12px;
+          padding-top: 12px;
+        }}
+        textarea {{
+          width: 100%;
+          min-height: 38px;
+          resize: vertical;
+          border: 1px solid #cbd5e1;
+          border-radius: 7px;
+          padding: 8px 10px;
+          font: inherit;
+        }}
         .empty {{ background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: 28px; color: var(--muted); }}
         @media (max-width: 1100px) {{
           .shell {{ display: block; }}
@@ -587,6 +681,7 @@ def telegram_signals_dashboard(
           .toolbar {{ align-items: flex-start; flex-direction: column; }}
           .filters {{ grid-template-columns: repeat(2, minmax(0, 1fr)); }}
           .columns {{ grid-template-columns: 1fr; }}
+          .crm-form {{ grid-template-columns: 1fr; }}
           .card-footer {{ align-items: flex-start; flex-direction: column; }}
         }}
       </style>
@@ -622,11 +717,13 @@ def telegram_signals_dashboard(
         </section>
 
         <nav class="quick-nav">{quick_nav}</nav>
+        <div class="exports">{export_links}</div>
 
         <form class="filters">
           <label>Score от <input name="min_score" type="number" value="{score}" min="0" max="100"></label>
           <label>Площадка <select name="marketplace">{marketplace_options}</select></label>
           <label>Статус <select name="status">{status_options}</select></label>
+          <label>Тег <select name="crm_tag">{tag_options}</select></label>
           <label>Разбор <select name="review_status">{review_options}</select></label>
           <label>Боль <select name="lead_category">{category_options}</select></label>
           <label>Ниша <input name="niche" value="{escape(niche)}" placeholder="одежда, электроника..."></label>
