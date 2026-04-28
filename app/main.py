@@ -429,8 +429,9 @@ def telegram_signals_dashboard(
     per_page = per_page if per_page in {10, 50, 200} else 50
     page = max(1, page)
     is_raw_view = view == "raw"
+    lead_fit_filter = None if is_raw_view else ["nurture"] if view == "nurture" else WORKING_LEAD_FITS
     filter_kwargs = {
-        "lead_fit_in": None if is_raw_view else WORKING_LEAD_FITS,
+        "lead_fit_in": lead_fit_filter,
         "min_score": score or None,
         "marketplace": marketplace or None,
         "niche": niche or None,
@@ -593,7 +594,7 @@ def telegram_signals_dashboard(
         f"<option value='{escape(value)}' {_selected(crm_tag, value)}>{escape(label)}</option>"
         for value, label in [("", "Все"), *CRM_TAG_LABELS.items()]
     )
-    view_hidden = "<input type='hidden' name='view' value='raw'>" if is_raw_view else ""
+    view_hidden = f"<input type='hidden' name='view' value='{escape(view)}'>" if view in {"raw", "nurture"} else ""
     per_page_options = "".join(
         f"<option value='{value}' {_selected(str(per_page), str(value))}>{value}</option>"
         for value in [10, 50, 200]
@@ -638,6 +639,7 @@ def telegram_signals_dashboard(
 
     quick_links = [
         ("На проверку", "/telegram-signals?review_status=unchecked", _count_signals(review_status="unchecked")),
+        ("Наблюдать", "/telegram-signals?view=nurture", count_signals(lead_fit_in=["nurture"])),
         ("ОК написать", "/telegram-signals?review_status=ok&status=new", _count_signals(review_status="ok", status="new")),
         ("Прочитал", "/telegram-signals?status=reviewed", _count_signals(status="reviewed")),
         ("Написал", "/telegram-signals?status=contacted", _count_signals(status="contacted")),
@@ -657,6 +659,7 @@ def telegram_signals_dashboard(
             "Качество лида",
             [
                 ("На проверку", "/telegram-signals?review_status=unchecked", _count_signals(review_status="unchecked")),
+                ("Наблюдать", "/telegram-signals?view=nurture", count_signals(lead_fit_in=["nurture"])),
                 ("ОК", "/telegram-signals?review_status=ok", _count_signals(review_status="ok")),
                 ("Не ОК", "/telegram-signals?review_status=not_ok", _count_signals(review_status="not_ok")),
                 ("Сырье", "/telegram-signals?view=raw", count_signals()),

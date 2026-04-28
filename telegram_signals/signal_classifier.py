@@ -703,7 +703,7 @@ def classify_outreach_segment(text_l: str, lead_fit: str, message_type: str) -> 
 
 
 def _detect_lead_category(text_l: str, lead_fit: str, message_type: str) -> str:
-    if lead_fit == "contractor" or message_type in {"noise", "supplier_ad", "vacancy", "service_ad"}:
+    if lead_fit == "contractor" or message_type in {"supplier_ad", "vacancy", "service_ad"}:
         return "not_target"
     if message_type == "expert_content" and not any(x in text_l for x in ["у нас", "у меня", "ищу", "ищем", "нужен", "нужна", "хочу", "хотим", "подскажите"]):
         return "not_target"
@@ -729,6 +729,8 @@ def _detect_lead_category(text_l: str, lead_fit: str, message_type: str) -> str:
         return "consultation_request"
     if any(x in text_l for x in ["wb", "wildberries", "ozon", "маркетплейс", "селлер"]):
         return "marketplace_complaint"
+    if message_type == "noise":
+        return "not_target"
     return "not_target"
 
 
@@ -906,9 +908,9 @@ def _fit_from_score(
         return "not_icp", "ignore"
     if contact_entity_type in {"channel", "bot"} and not has_live_problem:
         return "market_insight", "use_as_context"
-    if is_person_reachable != 1 and lead_category not in {"contractor_search", "marketer_search", "direct_channel"}:
-        return "nurture" if score >= 55 else "not_icp", "observe"
     if legacy_fit in {"contractor", "noise"} and score < 60:
+        if has_live_problem and lead_category in {"returns_logistics", "taxes", "certification", "consultation_request", "marketplace_complaint", "sales_growth"}:
+            return "nurture", "observe"
         return "not_icp", "ignore"
     if message_type == "market_intelligence":
         return "market_insight", "use_as_context"
@@ -918,6 +920,10 @@ def _fit_from_score(
         return "hot_outreach", "outreach_now"
     if score >= 60:
         return "warm_reply", "reply_with_value"
+    if has_live_problem and lead_category in {"returns_logistics", "taxes", "certification", "consultation_request", "marketplace_complaint", "sales_growth"}:
+        return "nurture", "observe"
+    if is_person_reachable != 1 and lead_category not in {"contractor_search", "marketer_search", "direct_channel"}:
+        return "nurture" if score >= 55 else "not_icp", "observe"
     if score >= 40:
         return "nurture", "observe"
     return "not_icp", "ignore"

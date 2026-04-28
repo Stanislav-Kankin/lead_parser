@@ -9,7 +9,7 @@ from sqlalchemy import case, desc, func, or_, select
 from storage.db import SessionLocal
 from .models import SearchProfile, TelegramSignal, TelegramSignalComment
 
-WORKING_LEAD_FITS = ["hot_outreach", "warm_reply", "target", "review"]
+WORKING_LEAD_FITS = ["hot_outreach", "warm_reply", "nurture", "target", "review"]
 OUTREACH_LEAD_FITS = ["hot_outreach", "target"]
 REVIEW_LEAD_FITS = ["warm_reply", "nurture", "review"]
 
