@@ -9,6 +9,9 @@ from sqlalchemy import case, desc, func, or_, select
 from storage.db import SessionLocal
 from .models import SearchProfile, TelegramSignal, TelegramSignalComment
 
+WORKING_LEAD_FITS = ["hot_outreach", "warm_reply", "target", "review"]
+OUTREACH_LEAD_FITS = ["hot_outreach", "target"]
+REVIEW_LEAD_FITS = ["warm_reply", "nurture", "review"]
 
 AD_TEXT_EXCLUDE_PATTERNS = (
     "наклейки-замки",
@@ -225,12 +228,12 @@ def count_signals(
 
 def get_target_leads(segment: str | None = None, limit: int | None = None, *, include_reviewed: bool = False) -> list[TelegramSignal]:
     kwargs = {} if include_reviewed else {"review_status": "unchecked"}
-    return get_signals(segment=segment, limit=limit, lead_fit="target", **kwargs)
+    return get_signals(segment=segment, limit=limit, lead_fit_in=OUTREACH_LEAD_FITS, **kwargs)
 
 
 def get_review_leads(segment: str | None = None, limit: int | None = None, *, include_reviewed: bool = False) -> list[TelegramSignal]:
     kwargs = {} if include_reviewed else {"review_status": "unchecked"}
-    return get_signals(segment=segment, limit=limit, lead_fit="review", **kwargs)
+    return get_signals(segment=segment, limit=limit, lead_fit_in=REVIEW_LEAD_FITS, **kwargs)
 
 
 def get_discussion_leads(segment: str | None = None, limit: int | None = None) -> list[TelegramSignal]:
@@ -239,7 +242,7 @@ def get_discussion_leads(segment: str | None = None, limit: int | None = None) -
         if segment:
             stmt = stmt.where(TelegramSignal.segment == segment)
         stmt = stmt.where(
-            TelegramSignal.lead_fit.in_(["target", "review"]),
+            TelegramSignal.lead_fit.in_(WORKING_LEAD_FITS + ["nurture"]),
             TelegramSignal.author_type_guess != "contractor",
             or_(
                 TelegramSignal.context_score >= 2,
@@ -262,7 +265,7 @@ def get_discussion_leads(segment: str | None = None, limit: int | None = None) -
 
 
 def get_business_like_messages(segment: str | None = None, limit: int | None = None) -> list[TelegramSignal]:
-    return get_signals(segment=segment, limit=limit, business_only=True, lead_fit_in=["target", "review"])
+    return get_signals(segment=segment, limit=limit, business_only=True, lead_fit_in=WORKING_LEAD_FITS)
 
 
 def get_market_intelligence(segment: str | None = None, limit: int | None = None) -> list[TelegramSignal]:
@@ -282,15 +285,15 @@ def get_market_intelligence(segment: str | None = None, limit: int | None = None
 
 
 def get_reviewed_leads(review_status: str, segment: str | None = None, limit: int | None = None) -> list[TelegramSignal]:
-    return get_signals(segment=segment, limit=limit, lead_fit_in=["target", "review"], review_status=review_status, status_not="contacted")
+    return get_signals(segment=segment, limit=limit, lead_fit_in=WORKING_LEAD_FITS, review_status=review_status, status_not="contacted")
 
 
 def get_contacted_leads(segment: str | None = None, limit: int | None = None) -> list[TelegramSignal]:
-    return get_signals(segment=segment, limit=limit, lead_fit_in=["target", "review"], review_status="ok", status="contacted")
+    return get_signals(segment=segment, limit=limit, lead_fit_in=WORKING_LEAD_FITS, review_status="ok", status="contacted")
 
 
 def get_hot_leads(limit: int | None = 10) -> list[TelegramSignal]:
-    return get_signals(limit=limit, lead_fit_in=["target", "review"], review_status="unchecked", status_not="contacted", min_score=80)
+    return get_signals(limit=limit, lead_fit_in=OUTREACH_LEAD_FITS, review_status="unchecked", status_not="contacted", min_score=80)
 
 
 def get_signal_by_id(signal_id: int) -> TelegramSignal | None:

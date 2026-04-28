@@ -14,6 +14,7 @@ from storage.db import init_db
 from telegram_signals.exporter import export_signals_to_xlsx
 from telegram_signals.keywords import SEGMENT_LABELS
 from telegram_signals.repository import (
+    WORKING_LEAD_FITS,
     count_signals,
     get_search_profile,
     get_signal_comments_map,
@@ -75,6 +76,8 @@ CATEGORY_LABELS = {
     "consultation_request": "Просит совет",
     "contractor_search": "Ищет подрядчика",
     "marketer_search": "Ищет маркетолога",
+    "taxes": "Налоги / отчеты",
+    "certification": "Сертификация",
     "not_target": "Нецелевой",
 }
 
@@ -147,7 +150,7 @@ def _action_form(signal_id: int, label: str, status: str | None = None, review_s
 
 
 def _count_signals(**kwargs) -> int:
-    return count_signals(lead_fit_in=["target", "review"], **kwargs)
+    return count_signals(lead_fit_in=WORKING_LEAD_FITS, **kwargs)
 
 
 def _lines(value: str | None) -> list[str]:
@@ -178,7 +181,7 @@ def _run_collect_job(profile_id: int | None = None) -> None:
             }
         )
 
-    working_before = count_signals(lead_fit_in=["target", "review"])
+    working_before = count_signals(lead_fit_in=WORKING_LEAD_FITS)
     raw_before = count_signals()
 
     async def runner() -> dict:
@@ -199,7 +202,7 @@ def _run_collect_job(profile_id: int | None = None) -> None:
 
     try:
         result = asyncio.run(runner())
-        working_after = count_signals(lead_fit_in=["target", "review"])
+        working_after = count_signals(lead_fit_in=WORKING_LEAD_FITS)
         raw_after = count_signals()
         result["created_working"] = max(0, working_after - working_before)
         result["created_raw"] = max(0, raw_after - raw_before)
@@ -427,7 +430,7 @@ def telegram_signals_dashboard(
     page = max(1, page)
     is_raw_view = view == "raw"
     filter_kwargs = {
-        "lead_fit_in": None if is_raw_view else ["target", "review"],
+        "lead_fit_in": None if is_raw_view else WORKING_LEAD_FITS,
         "min_score": score or None,
         "marketplace": marketplace or None,
         "niche": niche or None,
@@ -447,7 +450,7 @@ def telegram_signals_dashboard(
     comments_by_signal = get_signal_comments_map([item.id for item in items], limit_per_signal=5)
 
     contacted_count = sum(1 for item in items if item.status == "contacted")
-    active_count = count_signals(lead_fit_in=["target", "review"], status="new") + count_signals(lead_fit_in=["target", "review"], status="reviewed")
+    active_count = count_signals(lead_fit_in=WORKING_LEAD_FITS, status="new") + count_signals(lead_fit_in=WORKING_LEAD_FITS, status="reviewed")
     hot_count = sum(1 for item in items if (item.lead_score_100 or 0) >= 80)
     avg_score = round(sum((item.lead_score_100 or 0) for item in items) / len(items)) if items else 0
 
@@ -458,7 +461,7 @@ def telegram_signals_dashboard(
         message_link = _message_link(item)
         contact_link = _contact_link(item)
         text = escape(_short(item.text_excerpt or item.message_text, 520))
-        opener = escape(_short(item.opener_expert or item.opener_soft or item.recommended_opener, 520))
+        opener = escape(_short(item.best_reply_draft or item.opener_expert or item.opener_soft or item.recommended_opener, 520))
         category = CATEGORY_LABELS.get(item.lead_category or "", item.lead_category or "Не определено")
         status_label = STATUS_LABELS.get(item.status or "new", item.status or "Новый")
         review_label = REVIEW_LABELS.get(item.review_status or "unchecked", item.review_status or "Не разобран")
@@ -519,6 +522,8 @@ def telegram_signals_dashboard(
                 <span>{escape(item.niche or "ниша не указана")}</span>
                 <span>{escape(item.likely_icp or "ICP unknown")}</span>
                 <span>{escape(category)}</span>
+                <span>{escape(item.lead_fit or "-")}</span>
+                <span>{escape(item.bridge_to_offer or "no_bridge")}</span>
               </div>
 
               <div class="columns">

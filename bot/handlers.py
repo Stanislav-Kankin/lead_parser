@@ -16,6 +16,7 @@ from sources.query_builder import build_queries
 from storage.lead_repository import get_last_leads, save_leads
 from telegram_signals.exporter import export_signals_to_xlsx
 from telegram_signals.repository import (
+    WORKING_LEAD_FITS,
     get_contacted_leads,
     get_signal_by_id,
     get_business_like_messages,
@@ -81,6 +82,10 @@ def _build_message_link(signal) -> str | None:
 
 
 def _build_outreach_text(signal) -> str:
+    best_reply = (getattr(signal, "best_reply_draft", None) or "").strip()
+    if best_reply:
+        return best_reply
+
     name = (getattr(signal, "author_name", None) or "").strip()
     first_name = name.split()[0] if name and name.lower() not in {"-", "unknown"} else ""
     hello = f"{first_name}, добрый день!" if first_name else "Добрый день!"
@@ -506,7 +511,8 @@ def _format_signal_card(signal) -> str:
 
 def _format_sales_signal_card(idx: int, signal) -> str:
     opener = _trim_text(
-        getattr(signal, "opener_expert", None)
+        getattr(signal, "best_reply_draft", None)
+        or getattr(signal, "opener_expert", None)
         or getattr(signal, "opener_soft", None)
         or getattr(signal, "recommended_opener", None)
         or "-",
@@ -908,7 +914,7 @@ async def send_outreach_message(callback: CallbackQuery):
 @router.callback_query(F.data.startswith("tg_actionable:"))
 async def tg_actionable(callback: CallbackQuery):
     segment_filter, page = _parse_segment_page(callback.data or "")
-    items = get_signals(segment=segment_filter, limit=None, lead_fit_in=["target", "review"])
+    items = get_signals(segment=segment_filter, limit=None, lead_fit_in=WORKING_LEAD_FITS)
     if not items:
         await _send_or_edit(callback, "Пока актуальных лидов нет. Сначала запусти поиск по сегменту.", reply_markup=telegram_signals_menu())
         await callback.answer()
@@ -1457,6 +1463,11 @@ def _ru_lead_fit(value: str | None) -> str:
     mapping = {
         "target": "Живая боль",
         "review": "На проверку",
+        "hot_outreach": "Hot: писать",
+        "warm_reply": "Warm: ответ через пользу",
+        "nurture": "Nurture",
+        "market_insight": "Инсайт рынка",
+        "not_icp": "Не ICP",
         "contractor": "Подрядчик",
         "noise": "Шум/рынок",
     }

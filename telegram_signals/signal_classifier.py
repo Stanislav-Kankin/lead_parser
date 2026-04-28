@@ -630,7 +630,7 @@ def build_recommended_opener(text_l: str, message_type: str, lead_fit: str) -> s
 
 
 def classify_outreach_segment(text_l: str, lead_fit: str, message_type: str) -> dict:
-    if lead_fit in {"noise", "contractor"}:
+    if lead_fit in {"noise", "contractor", "not_icp"}:
         return {
             "outreach_segment": "ignore",
             "outreach_stage": "ignore",
@@ -651,7 +651,7 @@ def classify_outreach_segment(text_l: str, lead_fit: str, message_type: str) -> 
             "outreach_angle": "Есть интерес к каналу вне MP. Заходить через аккуратный тест сайта/Кита/Директа без отказа от WB/Ozon.",
         }
 
-    if any(x in text_l for x in ["возврат", "пвз", "невыкуп", "не выкуп", "срок хранения", "логистика", "застрял", "груз", "границе"]):
+    if lead_fit == "nurture" or any(x in text_l for x in ["возврат", "пвз", "невыкуп", "не выкуп", "срок хранения", "логистика", "застрял", "груз", "границе"]):
         return {
             "outreach_segment": "mp_operations",
             "outreach_stage": "awareness",
@@ -687,8 +687,12 @@ def classify_outreach_segment(text_l: str, lead_fit: str, message_type: str) -> 
 
 
 def _detect_lead_category(text_l: str, lead_fit: str, message_type: str) -> str:
-    if lead_fit in {"noise", "contractor"} or message_type in {"noise", "supplier_ad", "vacancy", "service_ad"}:
+    if lead_fit == "contractor" or message_type in {"noise", "supplier_ad", "vacancy", "service_ad"}:
         return "not_target"
+    if any(x in text_l for x in ["налог", "усн", "упд", "отчет реализации", "отчёт реализации", "бухгалтер", "документ"]):
+        return "taxes"
+    if any(x in text_l for x in ["сертифик", "деклараци", "честный знак", "маркировк"]):
+        return "certification"
     if any(x in text_l for x in ["ищем подрядчика", "ищем агентство", "нужен подрядчик", "кого посоветуете", "кто поможет"]):
         return "contractor_search"
     if any(x in text_l for x in ["маркетолог", "директолог", "настройка директ", "настроить директ"]):
@@ -697,7 +701,7 @@ def _detect_lead_category(text_l: str, lead_fit: str, message_type: str) -> str:
         return "ads_complaint"
     if any(x in text_l for x in ["комисси", "марж", "экономик", "штраф"]):
         return "unit_economics"
-    if any(x in text_l for x in ["возврат", "пвз", "логистик", "невыкуп", "груз", "границе"]):
+    if any(x in text_l for x in ["возврат", "пвз", "логистик", "невыкуп", "груз", "границе", "фбо", "фбс", "fbo", "fbs", "карго", "тамож"]):
         return "returns_logistics"
     if any(x in text_l for x in ["свой сайт", "свой магазин", "прямой канал", "яндекс кит", "яндекс.кит", "direct", "внешний трафик"]):
         return "direct_channel"
@@ -747,6 +751,22 @@ def _extract_budget_hint(text_l: str) -> str:
     return ""
 
 
+def _detect_bridge_to_offer(text_l: str, lead_category: str, likely_icp: str) -> str:
+    if any(x in text_l for x in ["яндекс кит", "яндекс.кит", "yandex kit", "кит"]):
+        return "kit_store"
+    if any(x in text_l for x in ["свой сайт", "свой магазин", "интернет-магазин", "прямой канал", "direct", "альтернатива маркетплейс"]):
+        return "direct_channel"
+    if any(x in text_l for x in ["директ", "внешний трафик", "трафик на сайт", "как лить трафик", "нужен трафик"]):
+        return "yandex_direct"
+    if lead_category in {"contractor_search", "marketer_search", "ads_complaint"}:
+        return "yandex_direct"
+    if lead_category == "unit_economics":
+        return "unit_economics_audit"
+    if lead_category == "sales_growth" and likely_icp in {"brand_manufacturer", "large_seller", "middle_seller", "business_owner"}:
+        return "unit_economics_audit"
+    return "no_bridge"
+
+
 def _detect_urgency(text_l: str, message_date_present: bool = True) -> str:
     if any(x in text_l for x in ["срочно", "сегодня", "завтра", "горит", "быстро", "прямо сейчас"]):
         return "high"
@@ -775,8 +795,10 @@ def _detect_likely_icp(text_l: str, author_type_guess: str, owner_likelihood_sco
 
 def _score_100(
     *,
+    text_l: str,
     lead_category: str,
     lead_fit: str,
+    bridge_to_offer: str,
     author_type_guess: str,
     likely_icp: str,
     pain_score: int,
@@ -788,40 +810,73 @@ def _score_100(
     urgency: str,
     budget_hint: str,
 ) -> int:
-    score = 5
-    if lead_fit == "target":
-        score += 20
-    elif lead_fit == "review":
-        score += 10
+    score = 0
     if lead_category in {"contractor_search", "marketer_search"}:
         score += 40
-    if lead_category in {"ads_complaint", "marketplace_complaint", "unit_economics", "returns_logistics", "sales_growth"}:
+    if bridge_to_offer in {"direct_channel", "kit_store"}:
+        score += 35
+    if lead_category == "ads_complaint":
         score += 30
-    if lead_category in {"direct_channel", "consultation_request"}:
+    if lead_category == "unit_economics":
+        score += 30
+    if lead_category == "direct_channel":
+        score += 25
+    if any(x in text_l for x in ["внешний трафик", "трафик на сайт", "директ", "нужен трафик"]):
         score += 25
     if author_type_guess == "business":
         score += 20
+    if any(x in text_l for x in ["у нас", "наш бренд", "мы продаем", "мы продаём", "производим", "свое производство", "своё производство"]):
+        score += 20
+    if any(x in text_l for x in ["электроник", "телефон", "ноутбук", "гаджет", "видеокарт"]):
+        score += 20
     if likely_icp in {"brand_manufacturer", "large_seller", "business_owner"}:
-        score += 15
+        score += 20
     elif likely_icp == "middle_seller":
-        score += 8
-    elif likely_icp == "newbie":
-        score -= 30
-    if budget_hint:
-        score += 15
-    if urgency == "high":
         score += 10
-    elif urgency == "medium":
+    if budget_hint:
+        score += 20 if "млн" in budget_hint or "mentioned" == budget_hint else 12
+    if contactability_score >= 4:
+        score += 15
+    elif contactability_score >= 1:
+        score += 8
+    if urgency == "high":
         score += 5
-    score += min(pain_score, 20) // 2
-    score += min(intent_score, 16) // 2
-    score += min(icp_score, 12) // 3
-    score += min(contactability_score, 8)
+    score += min(pain_score, 12) // 3
+    score += min(intent_score, 10) // 3
+    score += min(icp_score, 9) // 3
+    if lead_category == "returns_logistics" and bridge_to_offer == "no_bridge":
+        score -= 20
+    if lead_category == "taxes":
+        score -= 40
+    if any(x in text_l for x in ["карго", "тамож", "сертифик", "деклараци", "честный знак", "маркировк"]):
+        score -= 35
+    if likely_icp == "newbie" or any(x in text_l for x in ["новичок", "только начинаю", "первая поставка", "первый товар"]):
+        score -= 30
+    if any(x in text_l for x in ["товар до 300", "до 300 руб", "до 300р", "дешевый товар", "дешёвый товар"]):
+        score -= 30
+    if lead_category in {"returns_logistics", "taxes", "certification", "consultation_request"} and bridge_to_offer == "no_bridge":
+        score -= 25
     score -= min(promo_penalty, 40)
     score -= min(contractor_penalty, 50)
     if lead_category == "not_target":
         score -= 40
-    return max(1, min(100, score))
+    return max(0, min(100, score))
+
+
+def _fit_from_score(score: int, bridge_to_offer: str, lead_category: str, legacy_fit: str, message_type: str) -> tuple[str, str]:
+    if legacy_fit in {"contractor", "noise"} and score < 40:
+        return "not_icp", "ignore"
+    if message_type == "market_intelligence":
+        return "market_insight", "use_as_context"
+    if lead_category in {"taxes", "certification"} and bridge_to_offer == "no_bridge":
+        return "nurture", "observe"
+    if score >= 80 and bridge_to_offer != "no_bridge":
+        return "hot_outreach", "outreach_now"
+    if score >= 60:
+        return "warm_reply", "reply_with_value"
+    if score >= 40:
+        return "nurture", "observe"
+    return "not_icp", "ignore"
 
 
 def _build_openers(
@@ -871,6 +926,59 @@ def _build_openers(
         sales = soft
 
     return {"opener_soft": soft, "opener_expert": expert, "opener_sales": sales}
+
+
+def _build_best_reply(
+    *,
+    opener_text: str,
+    lead_category: str,
+    bridge_to_offer: str,
+    marketplace: str,
+) -> dict:
+    platform_question = "Это WB или Ozon?"
+    if lead_category == "returns_logistics":
+        draft = (
+            "Здравствуйте. Похоже, это не классический возврат по заявке, а авто-возврат/невыкуп: товар доехал до ПВЗ, покупатель не забрал, и площадка вернула его продавцу.\n\n"
+            "Я бы проверил SKU, срок доставки и всплеск по конкретным регионам.\n\n"
+            f"{platform_question}"
+        )
+        question = platform_question
+    elif lead_category == "sales_growth":
+        draft = (
+            "Добрый день. Я бы тут сначала смотрел не скидку, а первые поведенческие сигналы: показы, клики, корзины и выкуп.\n\n"
+            "Если клики есть, а корзин нет - чаще проблема в первом экране/цене/оффере. Если кликов нет - вопрос к запросам и показам.\n\n"
+            "Какая категория товара?"
+        )
+        question = "Какая категория товара?"
+    elif lead_category in {"unit_economics", "ads_complaint"}:
+        draft = (
+            "Добрый день. Обычно реклама на WB/Ozon перестает сходиться не из-за одной ставки, а из-за связки: комиссия, логистика, возвраты, скидка и внутренняя реклама.\n\n"
+            "Я бы сначала посчитал ДРР вместе со всеми расходами площадки.\n\n"
+            "Какая у вас категория и примерный средний чек?"
+        )
+        question = "Какая у вас категория и примерный средний чек?"
+    elif lead_category == "direct_channel" or bridge_to_offer in {"direct_channel", "kit_store", "yandex_direct"}:
+        draft = (
+            "Добрый день. Свой сайт лучше рассматривать не как замену WB/Ozon, а как тест параллельного канала.\n\n"
+            "Сначала стоит проверить маржу, SKU для прямой продажи и допустимый ДРР на первый заказ.\n\n"
+            "У вас уже есть сайт или пока только идея?"
+        )
+        question = "У вас уже есть сайт или пока только идея?"
+    elif lead_category in {"contractor_search", "marketer_search"}:
+        draft = (
+            "Добрый день. Перед выбором подрядчика я бы просил не просто настройку рекламы, а план теста: какие SKU берем, какой бюджет, допустимый ДРР и когда стоп.\n\n"
+            "Так быстро видно, кто мыслит экономикой, а кто просто льет трафик.\n\n"
+            "Вы ищете подрядчика под WB/Ozon или под сайт?"
+        )
+        question = "Вы ищете подрядчика под WB/Ozon или под сайт?"
+    else:
+        draft = opener_text
+        question = "Какая у вас категория товара?"
+    return {
+        "best_reply_draft": draft,
+        "next_question": question,
+        "reply_tone": "expert_value" if lead_category not in {"contractor_search", "marketer_search"} else "commercial_help",
+    }
 
 
 def _build_lead_fit(
@@ -1146,7 +1254,7 @@ def classify_signal(
     else:
         signal_level = "low"
 
-    lead_fit, next_step = _build_lead_fit(
+    legacy_lead_fit, legacy_next_step = _build_lead_fit(
         message_type=message_type,
         author_type_guess=author_type_guess,
         signal_score=signal_score,
@@ -1163,17 +1271,18 @@ def classify_signal(
         operational_score=operational_score,
         editorial_penalty=editorial_penalty,
     )
-    is_actionable = lead_fit == "target"
-    outreach = classify_outreach_segment(full_l, lead_fit, message_type)
-    lead_category = _detect_lead_category(full_l, lead_fit, message_type)
+    lead_category = _detect_lead_category(full_l, legacy_lead_fit, message_type)
     marketplace = _extract_marketplace(full_l)
     niche = _extract_niche(full_l)
     budget_hint = _extract_budget_hint(full_l)
     urgency = _detect_urgency(text_l)
     likely_icp = _detect_likely_icp(full_l, author_type_guess, owner_likelihood_score, contractor_penalty)
+    bridge_to_offer = _detect_bridge_to_offer(full_l, lead_category, likely_icp)
     lead_score_100 = _score_100(
+        text_l=full_l,
         lead_category=lead_category,
-        lead_fit=lead_fit,
+        lead_fit=legacy_lead_fit,
+        bridge_to_offer=bridge_to_offer,
         author_type_guess=author_type_guess,
         likely_icp=likely_icp,
         pain_score=pain_score,
@@ -1185,6 +1294,9 @@ def classify_signal(
         urgency=urgency,
         budget_hint=budget_hint,
     )
+    lead_fit, next_step = _fit_from_score(lead_score_100, bridge_to_offer, lead_category, legacy_lead_fit, message_type)
+    is_actionable = lead_fit == "hot_outreach"
+    outreach = classify_outreach_segment(full_l, lead_fit, message_type)
     openers = _build_openers(
         author_name=author_name,
         chat_title=chat_title,
@@ -1192,6 +1304,12 @@ def classify_signal(
         lead_category=lead_category,
         marketplace=marketplace,
         likely_icp=likely_icp,
+    )
+    reply = _build_best_reply(
+        opener_text=openers.get("opener_expert") or openers.get("opener_soft") or "",
+        lead_category=lead_category,
+        bridge_to_offer=bridge_to_offer,
+        marketplace=marketplace,
     )
 
     reasons = []
@@ -1257,6 +1375,7 @@ def classify_signal(
         "why_actionable": why,
         "recommended_opener": build_recommended_opener(full_l, message_type, lead_fit),
         **outreach,
+        "bridge_to_offer": bridge_to_offer,
         "lead_category": lead_category,
         "lead_score_100": lead_score_100,
         "likely_icp": likely_icp,
@@ -1264,5 +1383,6 @@ def classify_signal(
         "niche": niche,
         "budget_hint": budget_hint,
         "urgency": urgency,
+        **reply,
         **openers,
     }

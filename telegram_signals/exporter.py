@@ -8,6 +8,7 @@ from openpyxl.styles import Font
 from openpyxl.utils import get_column_letter
 
 from telegram_signals.repository import (
+    WORKING_LEAD_FITS,
     get_discussion_leads,
     get_market_intelligence,
     get_review_leads,
@@ -40,15 +41,15 @@ def export_signals_to_xlsx(kind: str = "actionable") -> Path:
         suffix = "review"
         title = "review_leads"
     elif kind == "ok":
-        items = get_signals(limit=None, lead_fit_in=["target", "review"], review_status="ok")
+        items = get_signals(limit=None, lead_fit_in=WORKING_LEAD_FITS, review_status="ok")
         suffix = "ok_leads"
         title = "ok_leads"
     elif kind == "not_ok":
-        items = get_signals(limit=None, lead_fit_in=["target", "review"], review_status="not_ok")
+        items = get_signals(limit=None, lead_fit_in=WORKING_LEAD_FITS, review_status="not_ok")
         suffix = "not_ok_leads"
         title = "not_ok_leads"
     elif kind == "all":
-        items = get_signals(limit=None, lead_fit_in=["target", "review"])
+        items = get_signals(limit=None, lead_fit_in=WORKING_LEAD_FITS)
         suffix = "all_leads"
         title = "all_leads"
     elif kind == "raw":
@@ -64,7 +65,7 @@ def export_signals_to_xlsx(kind: str = "actionable") -> Path:
         suffix = "target"
         title = "target_leads"
     else:
-        items = get_signals(limit=None, lead_fit_in=["target", "review"])
+        items = get_signals(limit=None, lead_fit_in=WORKING_LEAD_FITS)
         suffix = "sales_leads"
         title = "sales_leads"
     comments_by_signal = get_signal_comments_map([item.id for item in items], limit_per_signal=20)
@@ -102,6 +103,10 @@ def export_signals_to_xlsx(kind: str = "actionable") -> Path:
         "outreach_segment",
         "outreach_stage",
         "outreach_angle",
+        "bridge_to_offer",
+        "best_reply_draft",
+        "next_question",
+        "reply_tone",
         "opener_soft",
         "opener_expert",
         "opener_sales",
@@ -152,6 +157,10 @@ def export_signals_to_xlsx(kind: str = "actionable") -> Path:
             item.outreach_segment or "",
             item.outreach_stage or "",
             item.outreach_angle or "",
+            item.bridge_to_offer or "",
+            item.best_reply_draft or "",
+            item.next_question or "",
+            item.reply_tone or "",
             item.opener_soft or "",
             item.opener_expert or "",
             item.opener_sales or "",
