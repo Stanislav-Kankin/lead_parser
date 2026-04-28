@@ -64,6 +64,13 @@ EXPERT_CONTENT_PATTERNS = [
 ]
 
 EDITORIAL_PATTERNS = [
+    "алиса ответила",
+    "используйте промпт",
+    "промпт:",
+    "промпт ",
+    "видим ваши ответы",
+    "yandex.ru",
+    "direct.yandex.ru",
     "мы подготовили",
     "делимся",
     "рассказываем",
@@ -82,6 +89,15 @@ EDITORIAL_PATTERNS = [
     "подписывайтесь",
     "ставьте реакции",
     "собрали для вас",
+]
+
+HARD_EDITORIAL_PATTERNS = [
+    "алиса ответила",
+    "используйте промпт",
+    "промпт:",
+    "видим ваши ответы",
+    "yandex.ru",
+    "direct.yandex.ru",
 ]
 
 MARKET_OBSERVATION_PATTERNS = [
@@ -689,6 +705,8 @@ def classify_outreach_segment(text_l: str, lead_fit: str, message_type: str) -> 
 def _detect_lead_category(text_l: str, lead_fit: str, message_type: str) -> str:
     if lead_fit == "contractor" or message_type in {"noise", "supplier_ad", "vacancy", "service_ad"}:
         return "not_target"
+    if message_type == "expert_content" and not any(x in text_l for x in ["у нас", "у меня", "ищу", "ищем", "нужен", "нужна", "хочу", "хотим", "подскажите"]):
+        return "not_target"
     if any(x in text_l for x in ["налог", "усн", "упд", "отчет реализации", "отчёт реализации", "бухгалтер", "документ"]):
         return "taxes"
     if any(x in text_l for x in ["сертифик", "деклараци", "честный знак", "маркировк"]):
@@ -749,6 +767,14 @@ def _extract_budget_hint(text_l: str) -> str:
     if any(x in text_l for x in ["бюджет", "оборот", "выручк", "млн"]):
         return "mentioned"
     return ""
+
+
+def _has_small_money_marker(text_l: str) -> bool:
+    for raw in re.findall(r"\b\d[\d\s]{2,8}\b", text_l):
+        amount = int(re.sub(r"\D", "", raw) or 0)
+        if 0 < amount < 20000 and any(x in text_l for x in ["оплат", "заплат", "за настрой", "за работу", "руб", "₽"]):
+            return True
+    return any(x in text_l for x in ["6100", "6 100", "товар до 300", "до 300 руб", "до 300р"])
 
 
 def _detect_bridge_to_offer(text_l: str, lead_category: str, likely_icp: str) -> str:
@@ -854,6 +880,8 @@ def _score_100(
         score -= 30
     if any(x in text_l for x in ["товар до 300", "до 300 руб", "до 300р", "дешевый товар", "дешёвый товар"]):
         score -= 30
+    if _has_small_money_marker(text_l):
+        score -= 45
     if lead_category in {"returns_logistics", "taxes", "certification", "consultation_request"} and bridge_to_offer == "no_bridge":
         score -= 25
     score -= min(promo_penalty, 40)
@@ -863,8 +891,24 @@ def _score_100(
     return max(0, min(100, score))
 
 
-def _fit_from_score(score: int, bridge_to_offer: str, lead_category: str, legacy_fit: str, message_type: str) -> tuple[str, str]:
-    if legacy_fit in {"contractor", "noise"} and score < 40:
+def _fit_from_score(
+    score: int,
+    bridge_to_offer: str,
+    lead_category: str,
+    legacy_fit: str,
+    message_type: str,
+    *,
+    is_person_reachable: int,
+    contact_entity_type: str,
+    has_live_problem: bool,
+) -> tuple[str, str]:
+    if message_type in {"expert_content", "service_ad", "supplier_ad", "vacancy", "noise"} and not has_live_problem:
+        return "not_icp", "ignore"
+    if contact_entity_type in {"channel", "bot"} and not has_live_problem:
+        return "market_insight", "use_as_context"
+    if is_person_reachable != 1 and lead_category not in {"contractor_search", "marketer_search", "direct_channel"}:
+        return "nurture" if score >= 55 else "not_icp", "observe"
+    if legacy_fit in {"contractor", "noise"} and score < 60:
         return "not_icp", "ignore"
     if message_type == "market_intelligence":
         return "market_insight", "use_as_context"
@@ -1088,6 +1132,7 @@ def classify_signal(
     first_person_hits = [p for p in FIRST_PERSON_PAIN_PATTERNS if _contains_pattern(text_l, p)]
     expert_hits = [p for p in EXPERT_CONTENT_PATTERNS if p in text_l]
     editorial_hits = [p for p in EDITORIAL_PATTERNS if p in text_l]
+    hard_editorial_hits = [p for p in HARD_EDITORIAL_PATTERNS if p in text_l]
     market_hits = [p for p in MARKET_OBSERVATION_PATTERNS if p in text_l]
     supplier_hits = [p for p in SUPPLIER_AD_PATTERNS if p in text_l]
     channel_hits = [p for p in CHANNEL_AUTHOR_PATTERNS if p in text_l]
@@ -1145,7 +1190,7 @@ def classify_signal(
     if participant_score >= 4:
         conversation_score += 2
 
-    editorial_penalty = len(editorial_hits) * 3 + len(channel_hits) * 2 + len(official_hits) * 3
+    editorial_penalty = len(editorial_hits) * 3 + len(hard_editorial_hits) * 8 + len(channel_hits) * 2 + len(official_hits) * 3
     promo_penalty = editorial_penalty
     if any(x in text_l for x in ["напишите в лс", "есть кейсы", "помогаем", "делаем под ключ", "инфографика", "дизайн карточек"]):
         promo_penalty += 6
@@ -1158,7 +1203,9 @@ def classify_signal(
     has_live_problem = bool(first_person_hits or live_help_hits or operational_hits)
     is_editorial = editorial_penalty >= 4 or bool(editorial_hits or channel_hits or official_hits)
 
-    if noise_hits:
+    if hard_editorial_hits:
+        message_type = "expert_content"
+    elif noise_hits:
         message_type = "noise"
     elif "вакан" in text_l or "резюме" in text_l:
         message_type = "vacancy"
@@ -1294,7 +1341,16 @@ def classify_signal(
         urgency=urgency,
         budget_hint=budget_hint,
     )
-    lead_fit, next_step = _fit_from_score(lead_score_100, bridge_to_offer, lead_category, legacy_lead_fit, message_type)
+    lead_fit, next_step = _fit_from_score(
+        lead_score_100,
+        bridge_to_offer,
+        lead_category,
+        legacy_lead_fit,
+        message_type,
+        is_person_reachable=is_person_reachable,
+        contact_entity_type=contact_entity_type,
+        has_live_problem=has_live_problem,
+    )
     is_actionable = lead_fit == "hot_outreach"
     outreach = classify_outreach_segment(full_l, lead_fit, message_type)
     openers = _build_openers(
