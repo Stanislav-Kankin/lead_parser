@@ -1,18 +1,34 @@
 from __future__ import annotations
 
+import asyncio
+import logging
+from datetime import datetime
 from html import escape
+from threading import Lock
 from urllib.parse import urlencode
 
-from fastapi import FastAPI, Request
+from fastapi import BackgroundTasks, FastAPI, Request
 from fastapi.responses import HTMLResponse, RedirectResponse
 
 from storage.db import init_db
 from telegram_signals.repository import get_signals, set_signal_review_status, set_signal_status
+from telegram_signals.service import collect_signals
 
 app = FastAPI(title="Telegram Signals")
+logger = logging.getLogger(__name__)
+
+DASHBOARD_JOB = {
+    "running": False,
+    "last_started_at": None,
+    "last_finished_at": None,
+    "last_error": None,
+    "last_result": None,
+}
+JOB_LOCK = Lock()
 
 STATUS_LABELS = {
     "new": "Новый",
+    "reviewed": "Прочитал",
     "contacted": "Связались",
     "replied": "Ответил",
     "warm": "Теплый",
@@ -102,9 +118,64 @@ def _action_form(signal_id: int, label: str, status: str | None = None, review_s
         action += "?" + urlencode(params)
     return (
         f"<form method='post' action='{escape(action)}' class='inline-form'>"
-        f"<button class='btn {tone}'>{escape(label)}</button>"
+        f"<button type='submit' class='btn {tone}'>{escape(label)}</button>"
         "</form>"
     )
+
+
+def _run_collect_job() -> None:
+    with JOB_LOCK:
+        if DASHBOARD_JOB["running"]:
+            return
+        DASHBOARD_JOB.update(
+            {
+                "running": True,
+                "last_started_at": datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S"),
+                "last_finished_at": None,
+                "last_error": None,
+                "last_result": None,
+            }
+        )
+
+    async def runner() -> dict:
+        totals = {"created": 0, "updated": 0, "scanned_chats": 0, "scanned_messages": 0, "kept_signals": 0}
+        for segment in ["ecom_marketplace_pain", "ecom_direct_growth", "manufacturer_secondary"]:
+            result = await collect_signals(segment)
+            for key in totals:
+                totals[key] += int(result.get(key, 0) or 0)
+        return totals
+
+    try:
+        result = asyncio.run(runner())
+        with JOB_LOCK:
+            DASHBOARD_JOB.update(
+                {
+                    "running": False,
+                    "last_finished_at": datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S"),
+                    "last_error": None,
+                    "last_result": result,
+                }
+            )
+    except Exception as exc:
+        logger.exception("Dashboard Telegram collection failed")
+        with JOB_LOCK:
+            DASHBOARD_JOB.update(
+                {
+                    "running": False,
+                    "last_finished_at": datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S"),
+                    "last_error": str(exc),
+                    "last_result": None,
+                }
+            )
+
+
+@app.post("/telegram-signals/collect")
+def collect_from_dashboard(background_tasks: BackgroundTasks):
+    with JOB_LOCK:
+        running = bool(DASHBOARD_JOB["running"])
+    if not running:
+        background_tasks.add_task(_run_collect_job)
+    return RedirectResponse("/telegram-signals?review_status=unchecked", status_code=303)
 
 
 @app.post("/telegram-signals/{signal_id}/status")
@@ -139,7 +210,7 @@ def telegram_signals_dashboard(
     )
 
     contacted_count = sum(1 for item in items if item.status == "contacted")
-    active_count = sum(1 for item in items if item.status in {"new", None})
+    active_count = sum(1 for item in items if item.status in {"new", "reviewed", None})
     hot_count = sum(1 for item in items if (item.lead_score_100 or 0) >= 80)
     avg_score = round(sum((item.lead_score_100 or 0) for item in items) / len(items)) if items else 0
 
@@ -159,6 +230,7 @@ def telegram_signals_dashboard(
         actions = [
             _action_form(item.id, "ОК", review_status="ok", tone="ok"),
             _action_form(item.id, "Не ОК", review_status="not_ok", tone="danger"),
+            _action_form(item.id, "Прочитал", status="reviewed", review_status="ok"),
             _action_form(item.id, "Связался", status="contacted", review_status="ok", tone="primary"),
             _action_form(item.id, "Ответил", status="replied", review_status="ok"),
             _action_form(item.id, "Теплый", status="warm", review_status="ok"),
@@ -232,6 +304,38 @@ def telegram_signals_dashboard(
         f"<option value='{escape(value)}' {_selected(lead_category, value)}>{escape(label)}</option>"
         for value, label in [("", "Все"), *CATEGORY_LABELS.items()]
     )
+    job = dict(DASHBOARD_JOB)
+    if job["running"]:
+        job_text = "Идет сбор сигналов. Можно обновить страницу через минуту."
+        job_class = "job-running"
+    elif job["last_error"]:
+        job_text = f"Последний сбор упал: {job['last_error']}"
+        job_class = "job-error"
+    elif job["last_result"]:
+        result = job["last_result"]
+        job_text = (
+            f"Последний сбор: +{result.get('created', 0)} новых, "
+            f"{result.get('updated', 0)} обновлено, "
+            f"{result.get('scanned_messages', 0)} сообщений. "
+            f"Завершен: {job.get('last_finished_at') or '-'}"
+        )
+        job_class = "job-ok"
+    else:
+        job_text = "Сбор еще не запускался из dashboard."
+        job_class = "job-idle"
+
+    quick_links = [
+        ("На проверку", "/telegram-signals?review_status=unchecked"),
+        ("ОК написать", "/telegram-signals?review_status=ok&status=new"),
+        ("Прочитал", "/telegram-signals?status=reviewed"),
+        ("Связались", "/telegram-signals?status=contacted"),
+        ("Ответили", "/telegram-signals?status=replied"),
+        ("Теплые", "/telegram-signals?status=warm"),
+        ("Встречи", "/telegram-signals?status=meeting_booked"),
+        ("Архив", "/telegram-signals?status=dead"),
+        ("Hot", "/telegram-signals?hot=true"),
+    ]
+    quick_nav = "".join(f"<a class='quick-link' href='{escape(url)}'>{escape(label)}</a>" for label, url in quick_links)
 
     return f"""
     <!doctype html>
@@ -317,6 +421,46 @@ def telegram_signals_dashboard(
         .btn.ok {{ background: #ecfdf3; color: #067647; border-color: #abefc6; }}
         .btn.danger {{ background: #fff1f3; color: var(--red); border-color: #fecdd3; }}
         .btn.ghost {{ background: #fff; color: #344054; }}
+        .toolbar {{
+          display: flex;
+          align-items: center;
+          justify-content: space-between;
+          gap: 14px;
+          background: var(--panel);
+          border: 1px solid var(--line);
+          border-radius: 8px;
+          padding: 12px;
+          margin-bottom: 14px;
+        }}
+        .collect-form {{ margin: 0; }}
+        .collect-btn {{
+          height: 40px;
+          border: 0;
+          border-radius: 7px;
+          background: var(--blue);
+          color: #fff;
+          padding: 0 14px;
+          font: inherit;
+          font-weight: 700;
+          cursor: pointer;
+        }}
+        .collect-btn:disabled {{ background: #98a2b3; cursor: wait; }}
+        .job-status {{ flex: 1; color: var(--muted); }}
+        .job-error {{ color: var(--red); }}
+        .job-running {{ color: var(--blue); }}
+        .job-ok {{ color: var(--green); }}
+        .quick-nav {{ display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 14px; }}
+        .quick-link {{
+          display: inline-flex;
+          align-items: center;
+          min-height: 34px;
+          border: 1px solid var(--line);
+          border-radius: 999px;
+          background: #fff;
+          color: #344054;
+          padding: 0 12px;
+          text-decoration: none;
+        }}
         .lead-list {{ display: grid; gap: 14px; }}
         .lead-card {{
           background: var(--panel);
@@ -367,6 +511,7 @@ def telegram_signals_dashboard(
         @media (max-width: 1100px) {{
           .hero {{ display: block; }}
           .stats {{ min-width: 0; margin-top: 16px; }}
+          .toolbar {{ align-items: flex-start; flex-direction: column; }}
           .filters {{ grid-template-columns: repeat(2, minmax(0, 1fr)); }}
           .columns {{ grid-template-columns: 1fr; }}
           .card-footer {{ align-items: flex-start; flex-direction: column; }}
@@ -387,6 +532,15 @@ def telegram_signals_dashboard(
             <div class="stat"><b>{avg_score}</b><span>средний score</span></div>
           </div>
         </header>
+
+        <section class="toolbar">
+          <form method="post" action="/telegram-signals/collect" class="collect-form">
+            <button type="submit" class="collect-btn" {"disabled" if job["running"] else ""}>Запустить сбор лидов</button>
+          </form>
+          <div class="job-status {job_class}">{escape(job_text)}</div>
+        </section>
+
+        <nav class="quick-nav">{quick_nav}</nav>
 
         <form class="filters">
           <label>Score от <input name="min_score" type="number" value="{score}" min="0" max="100"></label>
