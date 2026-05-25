@@ -3,24 +3,30 @@ from typing import Any
 POSITIVE_SIGNALS = {
     "производитель": 4,
     "производство": 3,
+    "собственное производство": 5,
     "завод": 3,
     "фабрика": 3,
-    "оптом": 2,
-    "оптовый": 2,
-    "поставщик": 2,
+    "собственный бренд": 5,
+    "бренд": 3,
+    "direct to consumer": 4,
+    "d2c": 4,
+    "собственный сайт": 2,
+    "прямые продажи": 3,
+    "fmcg": 4,
+    "cpg": 4,
+    "масштабирование": 2,
+    "оптом": 1,
+    "оптовый": 1,
+    "поставщик": 1,
     "дистрибьютор": 2,
     "b2b": 3,
     "для бизнеса": 2,
     "контрактное производство": 4,
     "private label": 4,
-    "бренд": 1,
     "официальный сайт": 1,
 }
 
 NEGATIVE_SIGNALS = {
-    "интернет-магазин": -5,
-    "интернет магазин": -5,
-    "магазин": -4,
     "купить": -4,
     "цена": -3,
     "цены": -3,
@@ -28,14 +34,18 @@ NEGATIVE_SIGNALS = {
     "обзор": -4,
     "новости": -2,
     "сравнение": -4,
-    "маркетплейс": -4,
     "каталог": -3,
     "доставка": -2,
+    "дропшиппинг": -4,
+    "арбитраж": -3,
+    "посредник": -3,
+    "перепродажа": -3,
 }
 
 TYPE_MAP = {
-    "manufacturer_or_b2b": "Производитель / B2B",
+    "core_icp": "Ядро ICP: бренд / производитель",
     "possible_icp": "Потенциальный ICP",
+    "seller_segment": "Селлерский сегмент",
     "low_relevance": "Низкая релевантность",
 }
 
@@ -72,14 +82,17 @@ def classify_icp(
             score += weight
             negative_hits.append(signal)
 
-    is_icp = score >= 2
+    is_icp = score >= 3
 
-    if score >= 4:
-        lead_type = "manufacturer_or_b2b"
+    if score >= 6:
+        lead_type = "core_icp"
         priority = "high"
-    elif score >= 2:
+    elif score >= 3:
         lead_type = "possible_icp"
         priority = "medium"
+    elif score >= 1:
+        lead_type = "seller_segment"
+        priority = "low"
     else:
         lead_type = "low_relevance"
         priority = "low"

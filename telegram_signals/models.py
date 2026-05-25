@@ -70,6 +70,7 @@ class TelegramSignal(Base):
     contact_hint = Column(String, nullable=True)
     outreach_segment = Column(String, nullable=True)
     outreach_stage = Column(String, nullable=True)
+    cjm_stage = Column(String, nullable=True)
     outreach_angle = Column(Text, nullable=True)
     bridge_to_offer = Column(String, nullable=True)
     best_reply_draft = Column(Text, nullable=True)

@@ -63,6 +63,7 @@ TELEGRAM_SIGNAL_REQUIRED_COLUMNS = {
     "contact_hint": "ALTER TABLE telegram_signals ADD COLUMN contact_hint VARCHAR",
     "outreach_segment": "ALTER TABLE telegram_signals ADD COLUMN outreach_segment VARCHAR",
     "outreach_stage": "ALTER TABLE telegram_signals ADD COLUMN outreach_stage VARCHAR",
+    "cjm_stage": "ALTER TABLE telegram_signals ADD COLUMN cjm_stage VARCHAR",
     "outreach_angle": "ALTER TABLE telegram_signals ADD COLUMN outreach_angle TEXT",
     "bridge_to_offer": "ALTER TABLE telegram_signals ADD COLUMN bridge_to_offer VARCHAR",
     "best_reply_draft": "ALTER TABLE telegram_signals ADD COLUMN best_reply_draft TEXT",
@@ -181,10 +182,10 @@ def init_db():
 
 def _ensure_default_search_profiles():
     with SessionLocal() as session:
-        exists = session.query(SearchProfile.id).first()
-        if exists:
-            return
         for segment, queries in CHAT_DISCOVERY_KEYWORDS.items():
+            exists = session.query(SearchProfile.id).filter(SearchProfile.segment == segment).first()
+            if exists:
+                continue
             session.add(
                 SearchProfile(
                     name=SEGMENT_LABELS.get(segment, segment),

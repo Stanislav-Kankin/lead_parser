@@ -1371,7 +1371,28 @@ def _build_best_reply(
     lead_category: str,
     bridge_to_offer: str,
     marketplace: str,
+    cjm_stage: str,
 ) -> dict:
+    if cjm_stage == "awareness":
+        if lead_category in {"unit_economics", "ads_complaint", "marketplace_complaint", "sales_growth"} or bridge_to_offer in {"direct_channel", "kit_store", "yandex_direct", "unit_economics_audit", "promopages"}:
+            draft = (
+                "Добрый день. У брендов с рабочим performance в такой точке часто возникает не вопрос «как еще подкрутить рекламу», "
+                "а вопрос «где следующий слой роста и как проверить его без резких движений».\n\n"
+                "Интересно понять, вы сейчас это для себя как формулируете?"
+            )
+            return {"best_reply_draft": draft, "next_question": "Как вы сейчас формулируете эту задачу?", "reply_tone": "diagnostic"}
+        if lead_category == "direct_channel":
+            draft = (
+                "Добрый день. Свой сайт/direct обычно лучше рассматривать не как замену маркетплейсам, а как проверку следующего слоя спроса.\n\n"
+                "Если интересно, могу прислать 2-3 вопроса, с которых обычно понятно, есть ли там потенциал."
+            )
+            return {"best_reply_draft": draft, "next_question": "У вас уже есть сайт или пока только идея?", "reply_tone": "diagnostic"}
+        draft = (
+            "Добрый день. Похоже, вы описываете не разовую проблему в настройках, а момент, где текущая модель роста начинает упираться в потолок.\n\n"
+            "Если интересно, могу прислать 2-3 диагностических вопроса, по которым обычно видно, где именно ограничение."
+        )
+        return {"best_reply_draft": draft, "next_question": "Как вы сейчас формулируете это ограничение?", "reply_tone": "diagnostic"}
+
     platform_question = "Это WB или Ozon?"
     if lead_category == "returns_logistics":
         draft = (
@@ -1416,6 +1437,35 @@ def _build_best_reply(
         "next_question": question,
         "reply_tone": "expert_value" if lead_category not in {"contractor_search", "marketer_search"} else "commercial_help",
     }
+
+
+def _detect_cjm_stage(
+    *,
+    lead_fit: str,
+    has_live_problem: bool,
+    has_cjm_warm_signal: bool,
+    explicit_request_hits: list[str],
+    intent_hits: list[str],
+    live_help_hits: list[str],
+    pain_hits: list[str],
+    marketing_pain_hits: list[str],
+    cjm_ceiling_hits: list[str],
+    cjm_economics_hits: list[str],
+    cjm_safe_step_hits: list[str],
+    cjm_partner_friction_hits: list[str],
+) -> str:
+    if lead_fit in {"not_icp", "noise", "contractor"} and not has_cjm_warm_signal:
+        return "signal_only"
+    if lead_fit == "hot_outreach" or explicit_request_hits or any(
+        token in " ".join(intent_hits + live_help_hits)
+        for token in ["ищем подрядчика", "ищем агентство", "нужен подрядчик", "нужен маркетолог", "кто поможет", "кого посоветуете"]
+    ):
+        return "hot_outreach"
+    if has_live_problem and (intent_hits or live_help_hits or cjm_safe_step_hits):
+        return "consideration"
+    if has_cjm_warm_signal or pain_hits or marketing_pain_hits or cjm_ceiling_hits or cjm_economics_hits or cjm_partner_friction_hits:
+        return "awareness"
+    return "signal_only"
 
 
 def _build_lead_fit(
@@ -1859,6 +1909,20 @@ def classify_signal(
         next_step = "observe" if has_direct_request else "ignore"
         lead_score_100 = min(lead_score_100, 35)
     is_actionable = lead_fit == "hot_outreach"
+    cjm_stage = _detect_cjm_stage(
+        lead_fit=lead_fit,
+        has_live_problem=has_live_problem,
+        has_cjm_warm_signal=has_cjm_warm_signal,
+        explicit_request_hits=explicit_request_hits,
+        intent_hits=intent_hits,
+        live_help_hits=live_help_hits,
+        pain_hits=pain_hits,
+        marketing_pain_hits=marketing_pain_hits,
+        cjm_ceiling_hits=cjm_ceiling_hits,
+        cjm_economics_hits=cjm_economics_hits,
+        cjm_safe_step_hits=cjm_safe_step_hits,
+        cjm_partner_friction_hits=cjm_partner_friction_hits,
+    )
     outreach = classify_outreach_segment(full_l, lead_fit, message_type)
     openers = _build_openers(
         author_name=author_name,
@@ -1873,6 +1937,7 @@ def classify_signal(
         lead_category=lead_category,
         bridge_to_offer=bridge_to_offer,
         marketplace=marketplace,
+        cjm_stage=cjm_stage,
     )
 
     reasons = []
@@ -1938,6 +2003,7 @@ def classify_signal(
         "why_actionable": why,
         "recommended_opener": build_recommended_opener(full_l, message_type, lead_fit),
         **outreach,
+        "cjm_stage": cjm_stage,
         "bridge_to_offer": bridge_to_offer,
         "lead_category": lead_category,
         "lead_score_100": lead_score_100,

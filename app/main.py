@@ -80,6 +80,13 @@ REJECT_REASON_LABELS = {
     "duplicate": "Дубль",
 }
 
+CJM_STAGE_LABELS = {
+    "hot_outreach": "Ищет сейчас",
+    "consideration": "Изучает варианты",
+    "awareness": "Осознает проблему",
+    "signal_only": "Сигнал",
+}
+
 CATEGORY_LABELS = {
     "returns_logistics": "Возвраты / логистика",
     "unit_economics": "Экономика",
@@ -632,6 +639,7 @@ def telegram_signals_dashboard(
     crm_tag: str = "",
     review_status: str = "",
     reject_reason: str = "",
+    cjm_stage: str = "",
     lead_category: str = "",
     view: str = "work",
     hot: bool = False,
@@ -661,6 +669,7 @@ def telegram_signals_dashboard(
         "crm_tag": crm_tag or None,
         "review_status": review_status or None,
         "reject_reason": reject_reason or None,
+        "cjm_stage": cjm_stage or None,
         "lead_category": lead_category or None,
     }
     total_items = count_signals(**filter_kwargs)
@@ -691,6 +700,7 @@ def telegram_signals_dashboard(
         status_label = STATUS_LABELS.get(item.status or "new", item.status or "Новый")
         review_label = REVIEW_LABELS.get(item.review_status or "unchecked", item.review_status or "Не разобран")
         reject_reason_label = REJECT_REASON_LABELS.get(item.reject_reason or "", item.reject_reason or "")
+        cjm_stage_label = CJM_STAGE_LABELS.get(item.cjm_stage or "", item.cjm_stage or "")
         selected_tags = set(_split_tags(item.crm_tag))
         tag_labels = [CRM_TAG_LABELS.get(tag, tag) for tag in selected_tags]
         tag_label = ", ".join(tag_labels) if tag_labels else "Без тега"
@@ -759,6 +769,7 @@ def telegram_signals_dashboard(
                 <span>{escape(tag_label)}</span>
                 <span>{escape(review_label)}</span>
                 {f"<span>{escape(reject_reason_label)}</span>" if reject_reason_label else ""}
+                {f"<span>{escape(cjm_stage_label)}</span>" if cjm_stage_label else ""}
                 <span>{escape(item.marketplace or "MP не указан")}</span>
                 <span>{escape(item.niche or "ниша не указана")}</span>
                 <span>{escape(item.likely_icp or "ICP unknown")}</span>
@@ -845,6 +856,10 @@ def telegram_signals_dashboard(
         f"<option value='{escape(value)}' {_selected(reject_reason, value)}>{escape(label)}</option>"
         for value, label in [("", "Все"), *REJECT_REASON_LABELS.items()]
     )
+    cjm_stage_options = "".join(
+        f"<option value='{escape(value)}' {_selected(cjm_stage, value)}>{escape(label)}</option>"
+        for value, label in [("", "Все"), *CJM_STAGE_LABELS.items()]
+    )
     category_options = "".join(
         f"<option value='{escape(value)}' {_selected(lead_category, value)}>{escape(label)}</option>"
         for value, label in [("", "Все"), *CATEGORY_LABELS.items()]
@@ -866,6 +881,7 @@ def telegram_signals_dashboard(
         "crm_tag": crm_tag,
         "review_status": review_status,
         "reject_reason": reject_reason,
+        "cjm_stage": cjm_stage,
         "lead_category": lead_category,
         "view": view if view in {"raw", "nurture", "hot", "hypothesis"} else "",
         "hot": "true" if hot else "",
@@ -1053,7 +1069,7 @@ def telegram_signals_dashboard(
           top: 0;
           z-index: 5;
           display: grid;
-          grid-template-columns: 100px 140px 140px 150px 150px 170px 1fr 130px auto auto;
+          grid-template-columns: 80px 120px 120px 120px 130px 150px 150px 1fr 110px auto;
           gap: 10px;
           align-items: end;
           background: rgba(246, 248, 251, .94);
@@ -1403,7 +1419,7 @@ def telegram_signals_dashboard(
         .quick-link {{ min-height: 30px; padding: 0 9px; font-size: 13px; }}
         .exports {{ margin-bottom: 10px; }}
         .export-link {{ min-height: 30px; padding: 0 9px; font-size: 13px; }}
-        .filters {{ position: static; grid-template-columns: 80px 110px 120px 120px 120px minmax(150px, 1fr) 110px auto; gap: 8px; padding: 10px 0; margin-bottom: 10px; background: transparent; border-bottom: 1px solid var(--line); backdrop-filter: none; }}
+        .filters {{ position: static; grid-template-columns: 80px 100px 110px 110px 120px 130px 130px minmax(150px, 1fr) 100px auto; gap: 8px; padding: 10px 0; margin-bottom: 10px; background: transparent; border-bottom: 1px solid var(--line); backdrop-filter: none; }}
         .filters label:nth-of-type(4), .filters label:nth-of-type(9) {{ display: none; }}
         input, select {{ height: 34px; }}
         .filter-btn {{ height: 34px; min-height: 34px; }}
@@ -1481,6 +1497,7 @@ def telegram_signals_dashboard(
           <label>Тег <select name="crm_tag">{tag_options}</select></label>
           <label>Разбор <select name="review_status">{review_options}</select></label>
           <label>Причина <select name="reject_reason">{reject_reason_filter_options}</select></label>
+          <label>CJM <select name="cjm_stage">{cjm_stage_options}</select></label>
           <label>Боль <select name="lead_category">{category_options}</select></label>
           <label>Ниша <input name="niche" value="{escape(niche)}" placeholder="одежда, электроника..."></label>
           <label>На странице <select name="per_page">{per_page_options}</select></label>

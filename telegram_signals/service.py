@@ -338,6 +338,7 @@ async def collect_signals(
                     "contact_hint": signal.get("contact_hint"),
                     "outreach_segment": signal.get("outreach_segment"),
                     "outreach_stage": signal.get("outreach_stage"),
+                    "cjm_stage": signal.get("cjm_stage"),
                     "outreach_angle": signal.get("outreach_angle"),
                     "bridge_to_offer": signal.get("bridge_to_offer"),
                     "lead_category": signal.get("lead_category"),

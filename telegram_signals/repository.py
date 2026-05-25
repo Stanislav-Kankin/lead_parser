@@ -133,6 +133,7 @@ RECLASSIFY_FIELDS = [
     "contact_hint",
     "outreach_segment",
     "outreach_stage",
+    "cjm_stage",
     "outreach_angle",
     "bridge_to_offer",
     "best_reply_draft",
@@ -197,6 +198,7 @@ def get_signals(
     status: str | None = None,
     status_not: str | None = None,
     crm_tag: str | None = None,
+    cjm_stage: str | None = None,
     min_score: int | None = None,
     marketplace: str | None = None,
     niche: str | None = None,
@@ -236,6 +238,8 @@ def get_signals(
                     TelegramSignal.crm_tag.like(f"%,{crm_tag},%"),
                 )
             )
+        if cjm_stage:
+            stmt = stmt.where(TelegramSignal.cjm_stage == cjm_stage)
         if min_score is not None:
             stmt = stmt.where(TelegramSignal.lead_score_100 >= min_score)
         if marketplace:
@@ -279,6 +283,7 @@ def count_signals(
     reject_reason: str | None = None,
     status: str | None = None,
     crm_tag: str | None = None,
+    cjm_stage: str | None = None,
     min_score: int | None = None,
     marketplace: str | None = None,
     niche: str | None = None,
@@ -303,6 +308,8 @@ def count_signals(
                     TelegramSignal.crm_tag.like(f"%,{crm_tag},%"),
                 )
             )
+        if cjm_stage:
+            stmt = stmt.where(TelegramSignal.cjm_stage == cjm_stage)
         if min_score is not None:
             stmt = stmt.where(TelegramSignal.lead_score_100 >= min_score)
         if marketplace:
