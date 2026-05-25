@@ -437,11 +437,11 @@ def search_settings_dashboard():
 
             <div class="signal-rule">
               <b>Рабочий сигнал:</b> ICP + потолок текущей модели / ухудшение экономики / безопасный следующий шаг.
-              <span>Прямые запросы идут в горячие, зрелые симптомы без запроса — в гипотезы для аккуратного outreach.</span>
+              <span>Сбор ищет и источники, и сами сообщения по болевым фразам: CAC, ДРР, потолок MP, direct, внешний трафик, сайт.</span>
             </div>
 
             <div class="textarea-grid">
-              <label>Где искать каналы <textarea name="queries_text" spellcheck="false">{escape(queries)}</textarea></label>
+              <label>Темы для поиска источников <textarea name="queries_text" spellcheck="false">{escape(queries)}</textarea></label>
               <label>Конкретные чаты / каналы <textarea name="source_chats_text" spellcheck="false" placeholder="@chatname&#10;https://t.me/chatname&#10;chatname">{escape(source_chats)}</textarea></label>
               <label>Минус-слова сообщений <textarea name="stop_words_text" spellcheck="false" placeholder="новость&#10;вебинар&#10;вакансия&#10;мне кажется&#10;кейсы по выбору ниши">{escape(stop_words)}</textarea></label>
               <label>Плюс-слова в названии чата <textarea name="good_chat_hints_text" spellcheck="false">{escape(good_hints)}</textarea></label>
@@ -502,7 +502,7 @@ def search_settings_dashboard():
         <div class="topbar">
           <div>
             <h1>Настройка поиска сигналов</h1>
-            <div class="subtitle">Сначала находим релевантные каналы селлеров, потом пропускаем только сообщения с явной болью или прямым запросом на помощь.</div>
+            <div class="subtitle">Сбор теперь работает в два контура: ищет источники по темам и отдельно ищет сами сообщения по болевым формулировкам. В рабочую базу попадают только тексты, где классификатор видит ICP, боль и повод для аккуратного outreach.</div>
           </div>
           <div class="top-actions">
             <a class="link-btn" href="/telegram-signals">База лидов</a>
@@ -510,8 +510,8 @@ def search_settings_dashboard():
           </div>
         </div>
         <section class="preset-row">
-          <div class="preset"><b>1. Каналы</b><span>Запросы ищут чаты селлеров, брендов и интернет-магазинов, а не общие маркетинговые форумы.</span></div>
-          <div class="preset"><b>2. Сигнал</b><span>В рабочую базу попадает не только запрос, но и CJM-симптом: потолок MP, рост ДРР/CAC, страх слить бюджет, поиск безопасного теста.</span></div>
+          <div class="preset"><b>1. Источники</b><span>Запросы помогают найти чаты селлеров, брендов и интернет-магазинов, но больше не являются единственной точкой входа.</span></div>
+          <div class="preset"><b>2. Боль</b><span>Параллельно идет поиск сообщений по CJM-симптомам: потолок MP, рост ДРР/CAC, страх слить бюджет, direct, сайт, внешний трафик.</span></div>
           <div class="preset"><b>3. Отсев</b><span>Новости, рассуждения, кейсы, вакансии, обучение и поставщики режутся минус-словами и скорингом.</span></div>
         </section>
         {"".join(profile_cards)}

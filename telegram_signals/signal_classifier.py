@@ -171,6 +171,14 @@ EXPLICIT_SELLER_PAIN_PATTERNS = [
     "нет продаж",
     "продажи просели",
     "продажи упали",
+    "продажи остановились",
+    "спад продаж",
+    "спад по продажам",
+    "большой спад",
+    "все мертвое",
+    "всё мертвое",
+    "одну единицу за день",
+    "продаж стало меньше",
     "много возвратов",
     "возвраты съедают",
     "нет повторных продаж",
@@ -894,6 +902,8 @@ def _classify_contact_entity(
         return "unknown", 2, 0
 
     if chat_handle:
+        if ("чат" in title_l or "форум" in title_l or "селлер" in title_l or "seller" in title_l or "wb" in title_l or "ozon" in title_l or reply_depth >= 1) and author_name:
+            return "person_no_username", 3, 1
         if "чат" in title_l or "форум" in title_l or reply_depth >= 1:
             return "unknown", -3, 0
         return "channel", -10, 0
@@ -1114,6 +1124,8 @@ def _detect_lead_category(text_l: str, lead_fit: str, message_type: str) -> str:
         return "not_target"
     if message_type == "expert_content" and not any(x in text_l for x in ["у нас", "у меня", "ищу", "ищем", "нужен", "нужна", "хочу", "хотим", "подскажите"]):
         return "not_target"
+    if any(x in text_l for x in ["продаж нет", "нет продаж", "рост продаж", "первые продажи", "карточк", "спад продаж", "спад по продажам", "большой спад", "продажи остановились", "все мертвое", "всё мертвое", "одну единицу за день"]):
+        return "sales_growth"
     if any(x in text_l for x in ["налог", "усн", "упд", "отчет реализации", "отчёт реализации", "бухгалтер", "документ"]):
         return "taxes"
     if any(x in text_l for x in ["сертифик", "деклараци", "честный знак", "маркировк"]):
@@ -1130,7 +1142,7 @@ def _detect_lead_category(text_l: str, lead_fit: str, message_type: str) -> str:
         return "returns_logistics"
     if any(x in text_l for x in ["свой сайт", "свой магазин", "прямой канал", "яндекс кит", "яндекс.кит", "direct", "внешний трафик"]):
         return "direct_channel"
-    if any(x in text_l for x in ["продаж нет", "нет продаж", "рост продаж", "первые продажи", "карточк"]):
+    if any(x in text_l for x in ["продаж нет", "нет продаж", "рост продаж", "первые продажи", "карточк", "спад продаж", "спад по продажам", "большой спад", "продажи остановились", "все мертвое", "всё мертвое", "одну единицу за день"]):
         return "sales_growth"
     if any(x in text_l for x in ["консультац", "подскажите", "кто сталкивался", "кто знает"]):
         return "consultation_request"
@@ -1325,6 +1337,8 @@ def _fit_from_score(
         return "market_insight", "use_as_context"
     if lead_category in {"taxes", "certification"} and bridge_to_offer == "no_bridge":
         return "nurture", "observe"
+    if legacy_fit == "review" and has_live_problem and is_person_reachable == 1 and lead_category in {"marketplace_complaint", "sales_growth", "unit_economics", "ads_complaint", "direct_channel"}:
+        return "review", "research_company"
     if score >= 80 and bridge_to_offer != "no_bridge":
         return "hot_outreach", "outreach_now"
     if score >= 60:
@@ -1547,6 +1561,8 @@ def _build_lead_fit(
             return "noise", "ignore"
         if (pain_score >= 6 and (live_help_score >= 2 or operational_score >= 2 or intent_score >= 2)) or (intent_score >= 4 and icp_score >= 2) or (live_help_score >= 3 and icp_score >= 4):
             return "review", "research_company"
+        if pain_score >= 4 and icp_score >= 2 and contactability_score >= 1 and is_person_reachable == 1 and editorial_penalty < 4:
+            return "review", "research_company"
         return "noise", "ignore"
 
     if message_type == "peer_question":
@@ -1657,6 +1673,8 @@ def classify_signal(
 
     if any(x in full_l for x in ["wb", "ozon", "маркетплейс", "селлер", "seller", "sku", "карточк", "интернет-магазин", "сайт"]):
         icp_score += 2
+    if any(x in chat_haystack for x in ["wb", "wildberries", "ozon", "маркетплейс", "селлер", "seller"]):
+        icp_score += 2
 
     context_score = 0
     if context_text.strip():
@@ -1705,10 +1723,16 @@ def classify_signal(
         promo_penalty += 3
 
     strong_first_person_hits = [p for p in first_person_hits if p not in {"мне", "мой", "мои", "наш", "наши"}]
-    has_seller_context = bool(seller_context_hits or direct_hits or brand_hits or business_scope_hits)
+    has_seller_chat_context = any(x in chat_haystack for x in ["wb", "wildberries", "ozon", "маркетплейс", "селлер", "seller"])
+    has_seller_context = bool(seller_context_hits or has_seller_chat_context or direct_hits or brand_hits or business_scope_hits)
     has_own_business_context = bool(own_business_hits or owner_role_hits or (strong_first_person_hits and not third_party_hits))
     has_direct_request = bool(explicit_request_hits or intent_hits or live_help_hits)
     has_personal_commercial_context = bool(has_own_business_context and (pain_hits or marketing_pain_hits or cjm_economics_hits or cjm_ceiling_hits or operational_hits or change_event_hits or direct_hits or brand_hits))
+    has_peer_sales_pain = bool(
+        has_seller_context
+        and explicit_pain_hits
+        and any(x in text_l for x in ["продаж", "спад", "мертвое", "мёртвое", "единицу за день"])
+    )
     has_cjm_warm_signal = bool(
         has_seller_context
         and has_own_business_context
@@ -1719,7 +1743,7 @@ def classify_signal(
             or (cjm_safe_step_hits and (intent_hits or live_help_hits or "?" in text_l))
         )
     )
-    has_live_problem = bool((explicit_pain_hits and has_own_business_context) or has_direct_request or has_personal_commercial_context)
+    has_live_problem = bool((explicit_pain_hits and has_own_business_context) or has_peer_sales_pain or has_direct_request or has_personal_commercial_context)
     has_strong_commercial_signal = bool(has_live_problem and has_seller_context and (has_own_business_context or has_direct_request))
     is_editorial = editorial_penalty >= 4 or bool(editorial_hits or channel_hits or official_hits)
     is_soft_discussion = bool(soft_discussion_hits or weak_review_hits or market_hits) and not has_live_problem
@@ -1750,9 +1774,9 @@ def classify_signal(
         message_type = "service_ad"
     elif expert_hits and not (explicit_pain_hits or explicit_request_hits or live_help_hits):
         message_type = "expert_content"
-    elif reply_depth >= 1 and has_live_problem and (pain_hits or intent_hits or direct_hits or brand_hits or change_event_hits or marketing_pain_hits or live_help_hits):
+    elif reply_depth >= 1 and has_live_problem and (pain_hits or intent_hits or direct_hits or brand_hits or change_event_hits or marketing_pain_hits or live_help_hits or explicit_pain_hits):
         message_type = "participant_pain"
-    elif has_live_problem and (pain_hits or intent_hits or direct_hits or brand_hits or change_event_hits or marketing_pain_hits or live_help_hits):
+    elif has_live_problem and (pain_hits or intent_hits or direct_hits or brand_hits or change_event_hits or marketing_pain_hits or live_help_hits or explicit_pain_hits):
         message_type = "self_pain"
     elif live_help_hits and (direct_hits or brand_hits or intent_hits or operational_hits):
         message_type = "peer_question"
@@ -1808,6 +1832,9 @@ def classify_signal(
     if is_person_reachable and author_username:
         contactability_score += 4
         contact_hint = f"@{author_username}"
+    elif is_person_reachable and author_name:
+        contactability_score += 2
+        contact_hint = author_name
     elif author_username:
         contactability_score += 1
         contact_hint = f"@{author_username}"
@@ -1916,6 +1943,8 @@ def classify_signal(
         lead_fit = "warm_hypothesis"
         next_step = "outreach_hypothesis"
         lead_score_100 = max(lead_score_100, 55)
+    if lead_fit == "review" and lead_category in {"sales_growth", "marketplace_complaint", "unit_economics", "ads_complaint", "direct_channel"}:
+        lead_score_100 = max(lead_score_100, 35)
     if has_cjm_warm_signal and not has_direct_request and lead_fit == "hot_outreach":
         lead_fit = "warm_hypothesis"
         next_step = "outreach_hypothesis"
