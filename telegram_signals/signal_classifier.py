@@ -133,6 +133,14 @@ SOFT_DISCUSSION_PATTERNS = [
     "по крайней мере",
     "пока не работает",
     "ищу подходы",
+    "у меня знаком",
+    "много знакомых",
+    "все ноют",
+    "все говорят",
+    "в жизни все не так",
+    "я буду рассуждать",
+    "как специалист",
+    "как пользователь",
 ]
 
 EXPLICIT_SELLER_PAIN_PATTERNS = [
@@ -216,6 +224,120 @@ SELLER_CONTEXT_PATTERNS = [
     "свой сайт",
     "яндекс кит",
     "яндекс.кит",
+]
+
+OWN_BUSINESS_CONTEXT_PATTERNS = [
+    "у нас",
+    "мы продаем",
+    "мы продаём",
+    "продаем на wb",
+    "продаём на wb",
+    "продаем на ozon",
+    "продаём на ozon",
+    "мы селлер",
+    "я селлер",
+    "наш бренд",
+    "у нас бренд",
+    "наша компания",
+    "мы производим",
+    "свое производство",
+    "своё производство",
+    "наш сайт",
+    "наш магазин",
+    "свой сайт",
+    "свой магазин",
+    "у нас продажи",
+    "у нас реклама",
+    "у нас директ",
+    "наш директ",
+    "наш подрядчик",
+    "наше агентство",
+    "меняли подрядчиков",
+    "сменили подрядчиков",
+    "у меня магазин",
+    "мой магазин",
+    "мой товар",
+    "моя карточка",
+    "моя ниша",
+]
+
+THIRD_PARTY_CONTEXT_PATTERNS = [
+    "у меня знаком",
+    "много знакомых",
+    "все ноют",
+    "все говорят",
+    "все селлеры",
+    "селлеры говорят",
+    "многие селлеры",
+    "кто-то",
+    "у кого-то",
+    "где-то",
+    "в статье",
+    "в материале",
+]
+
+HARD_NOISE_PATTERNS = [
+    "доставка из китая",
+    "доставляем грузы",
+    "поставки напрямую",
+    "надежных поставщиков",
+    "надёжных поставщиков",
+    "поиску надежных поставщиков",
+    "поиску надёжных поставщиков",
+    "прямые партнерские отношения",
+    "прямые партнёрские отношения",
+    "регистрируйся и получи",
+    "разбор кабинета wb в подарок",
+    "добро пожаловать в нашу группу",
+    "по вопросам рекламы в чате",
+    "наш партнер",
+    "наш партнёр",
+    "вебинар",
+    "будет выступать",
+    "разберем:",
+    "интервью с китайским поставщиком",
+    "мы в телеграме",
+    "ozon fresh запустил",
+    "новый глава",
+    "анонсировал",
+    "официальный канал",
+]
+
+OPERATIONAL_NOT_GROWTH_PATTERNS = [
+    "тн вэд",
+    "тн вэд",
+    "код для карточки",
+    "классификаторе",
+    "поддержка молчит",
+    "надо грузить",
+    "штраф иначе",
+    "фбс",
+    "fbs",
+    "фбо",
+    "fbo",
+    "пвз",
+    "отвязать карточку",
+    "присоединить карточку",
+    "утилизированные товары",
+    "упд",
+    "усн",
+    "отчет реализации",
+    "отчёт реализации",
+    "сертификат",
+    "декларация",
+    "честный знак",
+    "маркировка",
+]
+
+BAD_CHAT_CONTEXT_PATTERNS = [
+    "яндекс для интернет-магазинов",
+    "поставщики",
+    "ozon marketplace",
+    "t-бизнес секреты",
+    "т-бизнес секреты",
+    "бот модератор",
+    "chatkeeperbot",
+    "group help",
 ]
 
 CJM_GROWTH_CEILING_PATTERNS = [
@@ -1386,6 +1508,11 @@ def classify_signal(
     cjm_economics_hits = [p for p in CJM_ECONOMICS_PRESSURE_PATTERNS if p in text_l]
     cjm_safe_step_hits = [p for p in CJM_SAFE_NEXT_STEP_PATTERNS if p in text_l]
     cjm_partner_friction_hits = [p for p in CJM_PARTNER_FRICTION_PATTERNS if p in text_l]
+    own_business_hits = [p for p in OWN_BUSINESS_CONTEXT_PATTERNS if p in text_l]
+    third_party_hits = [p for p in THIRD_PARTY_CONTEXT_PATTERNS if p in text_l]
+    hard_noise_hits = [p for p in HARD_NOISE_PATTERNS if p in text_l]
+    operational_not_growth_hits = [p for p in OPERATIONAL_NOT_GROWTH_PATTERNS if p in text_l]
+    bad_chat_hits = [p for p in BAD_CHAT_CONTEXT_PATTERNS if p in chat_haystack]
 
     first_person_pain_score = len(first_person_hits) * 3
     live_help_score = len(live_help_hits) * 3
@@ -1450,15 +1577,26 @@ def classify_signal(
         promo_penalty += 5
     if soft_discussion_hits and not explicit_pain_hits and not explicit_request_hits:
         promo_penalty += len(soft_discussion_hits) * 4
+    if third_party_hits and not own_business_hits:
+        promo_penalty += len(third_party_hits) * 5
+    if bad_chat_hits and not own_business_hits:
+        promo_penalty += len(bad_chat_hits) * 5
+    if hard_noise_hits:
+        promo_penalty += 25
+    if operational_not_growth_hits and not cjm_ceiling_hits and not cjm_economics_hits and not cjm_partner_friction_hits:
+        promo_penalty += 18
     promo_penalty += len(expert_hits) * 2
     if "рекламщик" in chat_title_l or "capital" in chat_title_l:
         promo_penalty += 3
 
     strong_first_person_hits = [p for p in first_person_hits if p not in {"мне", "мой", "мои", "наш", "наши"}]
     has_seller_context = bool(seller_context_hits or direct_hits or brand_hits or business_scope_hits)
-    has_personal_commercial_context = bool(strong_first_person_hits and (pain_hits or marketing_pain_hits or operational_hits or change_event_hits or direct_hits or brand_hits))
+    has_own_business_context = bool(own_business_hits or owner_role_hits or (strong_first_person_hits and not third_party_hits))
+    has_direct_request = bool(explicit_request_hits or intent_hits or live_help_hits)
+    has_personal_commercial_context = bool(has_own_business_context and (pain_hits or marketing_pain_hits or cjm_economics_hits or cjm_ceiling_hits or operational_hits or change_event_hits or direct_hits or brand_hits))
     has_cjm_warm_signal = bool(
         has_seller_context
+        and has_own_business_context
         and (
             cjm_ceiling_hits
             or cjm_partner_friction_hits
@@ -1466,12 +1604,18 @@ def classify_signal(
             or (cjm_safe_step_hits and (intent_hits or live_help_hits or "?" in text_l))
         )
     )
-    has_live_problem = bool(explicit_pain_hits or explicit_request_hits or live_help_hits or has_personal_commercial_context)
-    has_strong_commercial_signal = bool(has_live_problem and has_seller_context)
+    has_live_problem = bool((explicit_pain_hits and has_own_business_context) or has_direct_request or has_personal_commercial_context)
+    has_strong_commercial_signal = bool(has_live_problem and has_seller_context and (has_own_business_context or has_direct_request))
     is_editorial = editorial_penalty >= 4 or bool(editorial_hits or channel_hits or official_hits)
     is_soft_discussion = bool(soft_discussion_hits or weak_review_hits or market_hits) and not has_live_problem
 
-    if hard_editorial_hits:
+    if hard_noise_hits:
+        message_type = "supplier_ad"
+    elif operational_not_growth_hits and not has_cjm_warm_signal and not has_direct_request:
+        message_type = "noise"
+    elif bad_chat_hits and not has_own_business_context and not has_direct_request:
+        message_type = "market_intelligence"
+    elif hard_editorial_hits:
         message_type = "expert_content"
     elif noise_hits:
         message_type = "noise"
@@ -1643,7 +1787,7 @@ def classify_signal(
     )
     if (
         has_cjm_warm_signal
-        and lead_fit in {"not_icp", "nurture", "review"}
+        and lead_fit in {"not_icp", "nurture", "review", "warm_reply"}
         and message_type not in {"expert_content", "service_ad", "supplier_ad", "vacancy"}
         and contact_entity_type not in {"bot"}
         and editorial_penalty < 6
@@ -1651,6 +1795,22 @@ def classify_signal(
         lead_fit = "warm_hypothesis"
         next_step = "outreach_hypothesis"
         lead_score_100 = max(lead_score_100, 55)
+    if has_cjm_warm_signal and not has_direct_request and lead_fit == "hot_outreach":
+        lead_fit = "warm_hypothesis"
+        next_step = "outreach_hypothesis"
+        lead_score_100 = min(lead_score_100, 79)
+    if hard_noise_hits or (third_party_hits and not has_own_business_context and not has_direct_request):
+        lead_fit = "not_icp"
+        next_step = "ignore"
+        lead_score_100 = min(lead_score_100, 20)
+    elif bad_chat_hits and not has_own_business_context and not has_direct_request:
+        lead_fit = "market_insight"
+        next_step = "use_as_context"
+        lead_score_100 = min(lead_score_100, 30)
+    elif operational_not_growth_hits and lead_fit in {"hot_outreach", "warm_reply", "warm_hypothesis"}:
+        lead_fit = "nurture" if has_direct_request else "not_icp"
+        next_step = "observe" if has_direct_request else "ignore"
+        lead_score_100 = min(lead_score_100, 35)
     is_actionable = lead_fit == "hot_outreach"
     outreach = classify_outreach_segment(full_l, lead_fit, message_type)
     openers = _build_openers(
