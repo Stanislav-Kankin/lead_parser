@@ -90,6 +90,7 @@ class TelegramSignal(Base):
     crm_tag = Column(String, nullable=True)
     comment = Column(Text, nullable=True)
     review_status = Column(String, nullable=False, default="unchecked")
+    reject_reason = Column(String, nullable=True)
     reviewed_at = Column(DateTime, nullable=True)
     is_actionable = Column(Boolean, nullable=False, default=False)
     is_duplicate = Column(Boolean, nullable=False, default=False)

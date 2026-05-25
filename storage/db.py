@@ -84,6 +84,7 @@ TELEGRAM_SIGNAL_REQUIRED_COLUMNS = {
     "crm_tag": "ALTER TABLE telegram_signals ADD COLUMN crm_tag VARCHAR",
     "comment": "ALTER TABLE telegram_signals ADD COLUMN comment TEXT",
     "review_status": "ALTER TABLE telegram_signals ADD COLUMN review_status VARCHAR DEFAULT 'unchecked'",
+    "reject_reason": "ALTER TABLE telegram_signals ADD COLUMN reject_reason VARCHAR",
     "reviewed_at": "ALTER TABLE telegram_signals ADD COLUMN reviewed_at DATETIME",
     "is_actionable": "ALTER TABLE telegram_signals ADD COLUMN is_actionable BOOLEAN DEFAULT 0",
     "is_duplicate": "ALTER TABLE telegram_signals ADD COLUMN is_duplicate BOOLEAN DEFAULT 0"

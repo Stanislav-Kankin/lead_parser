@@ -1,8 +1,10 @@
 __pycache__/
 *.pyc
 .git/
+.env
 .venv/
 venv/
 leads.db
+lead_signal_session.session
 data/
 exports/*.xlsx

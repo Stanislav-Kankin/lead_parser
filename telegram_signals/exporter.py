@@ -121,6 +121,7 @@ def export_signals_to_xlsx(kind: str = "actionable") -> Path:
         "comment",
         "comment_history",
         "review_status",
+        "reject_reason",
         "reviewed_at",
     ]
     ws.append(headers)
@@ -178,6 +179,7 @@ def export_signals_to_xlsx(kind: str = "actionable") -> Path:
                 for comment in comments_by_signal.get(item.id, [])
             ),
             item.review_status or "",
+            item.reject_reason or "",
             format_msk(item.reviewed_at),
         ])
 

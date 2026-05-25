@@ -1,11 +1,6 @@
 fastapi
 uvicorn
-aiogram
 sqlalchemy
 python-dotenv
-httpx
-beautifulsoup4
-lxml
-ddgs
 telethon
 openpyxl

@@ -60,6 +60,7 @@ def _apply_author_history(session, item: dict) -> None:
     if contacted:
         item["status"] = "contacted"
         item["review_status"] = "ok"
+        item["reject_reason"] = None
         return
 
     not_ok = session.execute(
@@ -87,7 +88,7 @@ def save_signals(items: Iterable[dict]) -> dict:
 
             if exists:
                 for k, v in item.items():
-                    if k in {"review_status", "reviewed_at", "status"}:
+                    if k in {"review_status", "reject_reason", "reviewed_at", "status"}:
                         continue
                     setattr(exists, k, v)
                 updated += 1
@@ -354,18 +355,19 @@ def get_signal_comments_map(signal_ids: list[int], limit_per_signal: int = 3) ->
         return result
 
 
-def set_signal_review_status(signal_id: int, review_status: str) -> bool:
+def set_signal_review_status(signal_id: int, review_status: str, *, reject_reason: str | None = None) -> bool:
     with SessionLocal() as session:
         item = session.get(TelegramSignal, signal_id)
         if item is None:
             return False
         item.review_status = review_status
+        item.reject_reason = reject_reason if review_status == "not_ok" else None
         item.reviewed_at = datetime.utcnow()
         session.commit()
         return True
 
 
-def set_signal_status(signal_id: int, status: str, *, review_status: str | None = None) -> bool:
+def set_signal_status(signal_id: int, status: str, *, review_status: str | None = None, reject_reason: str | None = None) -> bool:
     with SessionLocal() as session:
         item = session.get(TelegramSignal, signal_id)
         if item is None:
@@ -373,12 +375,21 @@ def set_signal_status(signal_id: int, status: str, *, review_status: str | None 
         item.status = status
         if review_status:
             item.review_status = review_status
+            item.reject_reason = reject_reason if review_status == "not_ok" else None
             item.reviewed_at = datetime.utcnow()
         session.commit()
         return True
 
 
-def update_signal_crm(signal_id: int, *, status: str | None = None, crm_tag: str | None = None, comment: str | None = None, review_status: str | None = None) -> bool:
+def update_signal_crm(
+    signal_id: int,
+    *,
+    status: str | None = None,
+    crm_tag: str | None = None,
+    comment: str | None = None,
+    review_status: str | None = None,
+    reject_reason: str | None = None,
+) -> bool:
     with SessionLocal() as session:
         item = session.get(TelegramSignal, signal_id)
         if item is None:
@@ -400,6 +411,7 @@ def update_signal_crm(signal_id: int, *, status: str | None = None, crm_tag: str
                 )
         if review_status:
             item.review_status = review_status
+            item.reject_reason = reject_reason if review_status == "not_ok" else None
             item.reviewed_at = datetime.utcnow()
         session.commit()
         return True

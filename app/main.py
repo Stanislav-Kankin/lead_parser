@@ -66,6 +66,16 @@ REVIEW_LABELS = {
     "not_ok": "Не ОК",
 }
 
+REJECT_REASON_LABELS = {
+    "no_own_business": "Нет своего бизнеса",
+    "not_icp": "Не ICP",
+    "supplier_or_ad": "Поставщик / реклама",
+    "operations_only": "Операционка MP",
+    "soft_opinion": "Мнение / обсуждение",
+    "no_contact": "Нет контакта",
+    "duplicate": "Дубль",
+}
+
 CATEGORY_LABELS = {
     "returns_logistics": "Возвраты / логистика",
     "unit_economics": "Экономика",
@@ -146,12 +156,21 @@ def _return_url(request: Request) -> str:
     return "/telegram-signals"
 
 
-def _action_form(signal_id: int, label: str, status: str | None = None, review_status: str | None = None, tone: str = "ghost") -> str:
+def _action_form(
+    signal_id: int,
+    label: str,
+    status: str | None = None,
+    review_status: str | None = None,
+    reject_reason: str | None = None,
+    tone: str = "ghost",
+) -> str:
     params = {}
     if status:
         params["status"] = status
     if review_status:
         params["review_status"] = review_status
+    if reject_reason:
+        params["reject_reason"] = reject_reason
     action = f"/telegram-signals/{signal_id}/status"
     if params:
         action += "?" + urlencode(params)
@@ -262,11 +281,17 @@ def telegram_signals_job_status():
 
 
 @app.post("/telegram-signals/{signal_id}/status")
-def update_signal_status(signal_id: int, request: Request, status: str | None = None, review_status: str | None = None):
+def update_signal_status(
+    signal_id: int,
+    request: Request,
+    status: str | None = None,
+    review_status: str | None = None,
+    reject_reason: str | None = None,
+):
     if status:
-        set_signal_status(signal_id, status, review_status=review_status)
+        set_signal_status(signal_id, status, review_status=review_status, reject_reason=reject_reason)
     elif review_status:
-        set_signal_review_status(signal_id, review_status)
+        set_signal_review_status(signal_id, review_status, reject_reason=reject_reason)
     return RedirectResponse(_return_url(request), status_code=303)
 
 
@@ -281,6 +306,7 @@ async def update_signal_crm_from_dashboard(signal_id: int, request: Request):
         crm_tag=crm_tags,
         comment=str(form.get("comment") or ""),
         review_status=str(form.get("review_status") or "") or None,
+        reject_reason=str(form.get("reject_reason") or "") or None,
     )
     return RedirectResponse(_return_url(request), status_code=303)
 
@@ -524,10 +550,12 @@ def telegram_signals_dashboard(
         lead_fit_label = LEAD_FIT_LABELS.get(item.lead_fit or "", item.lead_fit or "-")
         status_label = STATUS_LABELS.get(item.status or "new", item.status or "Новый")
         review_label = REVIEW_LABELS.get(item.review_status or "unchecked", item.review_status or "Не разобран")
+        reject_reason_label = REJECT_REASON_LABELS.get(item.reject_reason or "", item.reject_reason or "")
         selected_tags = set(_split_tags(item.crm_tag))
         tag_labels = [CRM_TAG_LABELS.get(tag, tag) for tag in selected_tags]
         tag_label = ", ".join(tag_labels) if tag_labels else "Без тега"
         author = item.author_name or item.author_username or "Без имени"
+        why_actionable = escape(_short(item.why_actionable or "", 360))
 
         comment_items = comments_by_signal.get(item.id, [])
         comment_history = ""
@@ -547,7 +575,6 @@ def telegram_signals_dashboard(
 
         actions = [
             _action_form(item.id, "ОК", review_status="ok", tone="ok"),
-            _action_form(item.id, "Не ОК", review_status="not_ok", tone="danger"),
             _action_form(item.id, "Прочитал", status="reviewed", review_status="ok"),
             _action_form(item.id, "Написал", status="contacted", review_status="ok", tone="primary"),
             _action_form(item.id, "Ответил", status="replied", review_status="ok"),
@@ -556,6 +583,18 @@ def telegram_signals_dashboard(
             _action_form(item.id, "Продажа", status="sale", review_status="ok"),
             _action_form(item.id, "Архив", status="dead", review_status="not_ok"),
         ]
+        reject_actions = "".join(
+            _action_form(item.id, label, review_status="not_ok", reject_reason=reason, tone="danger")
+            for reason, label in REJECT_REASON_LABELS.items()
+        )
+        review_form_options = "".join(
+            f"<option value='{escape(value)}' {_selected(item.review_status or 'unchecked', value)}>{escape(label)}</option>"
+            for value, label in REVIEW_LABELS.items()
+        )
+        reject_reason_options = "<option value=''>Без причины</option>" + "".join(
+            f"<option value='{escape(value)}' {_selected(item.reject_reason or '', value)}>{escape(label)}</option>"
+            for value, label in REJECT_REASON_LABELS.items()
+        )
         links = []
         if message_link:
             links.append(f"<a class='link-btn' target='_blank' href='{escape(message_link)}'>Сообщение</a>")
@@ -577,6 +616,7 @@ def telegram_signals_dashboard(
                 <span>{escape(status_label)}</span>
                 <span>{escape(tag_label)}</span>
                 <span>{escape(review_label)}</span>
+                {f"<span>{escape(reject_reason_label)}</span>" if reject_reason_label else ""}
                 <span>{escape(item.marketplace or "MP не указан")}</span>
                 <span>{escape(item.niche or "ниша не указана")}</span>
                 <span>{escape(item.likely_icp or "ICP unknown")}</span>
@@ -584,6 +624,7 @@ def telegram_signals_dashboard(
                 <span>{escape(lead_fit_label)}</span>
                 <span>{escape(item.bridge_to_offer or "no_bridge")}</span>
               </div>
+              {f"<div class='why-line'>{why_actionable}</div>" if why_actionable else ""}
 
               <div class="columns">
                 <section>
@@ -599,6 +640,10 @@ def telegram_signals_dashboard(
 
               <div class="card-footer">
                 <div class="actions">{"".join(actions)}</div>
+                <details class="reject-menu">
+                  <summary>Не ОК: причина</summary>
+                  <div class="reject-actions">{reject_actions}</div>
+                </details>
                 <div class="links">{"".join(links)}</div>
               </div>
               <form method="post" action="/telegram-signals/{item.id}/crm" class="crm-form">
@@ -616,6 +661,12 @@ def telegram_signals_dashboard(
                     </div>
                   </details>
                 </div>
+                <label>Разбор
+                  <select name="review_status">{review_form_options}</select>
+                </label>
+                <label>Причина Не ОК
+                  <select name="reject_reason">{reject_reason_options}</select>
+                </label>
                 <label class="comment-field">Комментарий
                   <textarea name="comment" placeholder="Добавить новую заметку по лиду"></textarea>
                 </label>
@@ -1008,6 +1059,15 @@ def telegram_signals_dashboard(
           font-size: 12px;
           color: #344054;
         }}
+        .why-line {{
+          border: 1px solid #bbf7d0;
+          background: #f0fdf4;
+          color: #166534;
+          border-radius: 7px;
+          padding: 8px 10px;
+          margin: -2px 0 12px;
+          font-size: 13px;
+        }}
         .columns {{ display: grid; grid-template-columns: minmax(0, 1.1fr) minmax(0, .9fr); gap: 16px; }}
         .section-title {{ color: var(--muted); font-size: 12px; font-weight: 700; text-transform: uppercase; margin-bottom: 6px; }}
         p {{ margin: 0; white-space: pre-wrap; }}
@@ -1032,11 +1092,39 @@ def telegram_signals_dashboard(
           margin-top: 14px;
           padding-top: 12px;
         }}
-        .actions, .links {{ display: flex; flex-wrap: wrap; gap: 8px; }}
+        .actions, .links, .reject-actions {{ display: flex; flex-wrap: wrap; gap: 8px; }}
         .inline-form {{ display: inline; margin: 0; }}
+        .reject-menu {{
+          position: relative;
+          margin-left: auto;
+        }}
+        .reject-menu summary {{
+          min-height: 34px;
+          display: inline-flex;
+          align-items: center;
+          border: 1px solid #fecdd3;
+          border-radius: 7px;
+          background: #fff1f3;
+          color: var(--red);
+          padding: 0 10px;
+          cursor: pointer;
+          white-space: nowrap;
+        }}
+        .reject-actions {{
+          position: absolute;
+          z-index: 30;
+          right: 0;
+          top: 40px;
+          width: 320px;
+          border: 1px solid #fecdd3;
+          border-radius: 8px;
+          background: #fff;
+          box-shadow: 0 12px 28px rgba(16, 24, 40, .16);
+          padding: 8px;
+        }}
         .crm-form {{
           display: grid;
-          grid-template-columns: 160px 180px minmax(260px, 1fr) auto;
+          grid-template-columns: 140px 160px 130px 170px minmax(260px, 1fr) auto;
           gap: 10px;
           align-items: end;
           border-top: 1px solid var(--line);
@@ -1162,7 +1250,7 @@ def telegram_signals_dashboard(
         .card-footer {{ margin-top: 10px; padding-top: 10px; }}
         .actions, .links {{ gap: 6px; }}
         .btn, .link-btn {{ min-height: 30px; padding: 5px 8px; font-size: 13px; }}
-        .crm-form {{ grid-template-columns: 140px 160px minmax(220px, 1fr) auto; gap: 8px; margin-top: 10px; padding-top: 10px; }}
+        .crm-form {{ grid-template-columns: 120px 140px 120px 150px minmax(220px, 1fr) auto; gap: 8px; margin-top: 10px; padding-top: 10px; }}
         textarea {{ min-height: 34px; }}
         @media (max-width: 900px) {{
           .hero, .toolbar {{ display: block; }}
