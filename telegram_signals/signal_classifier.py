@@ -301,6 +301,16 @@ HARD_NOISE_PATTERNS = [
     "новый глава",
     "анонсировал",
     "официальный канал",
+    "только у нас",
+    "кэшбэк",
+    "кэш",
+    "для заказа",
+    "отправить скрин",
+    "согласовать выкуп",
+    "публикации отзыва",
+    "количество ограничено",
+    "цена для вас",
+    "цена на сайте",
 ]
 
 OPERATIONAL_NOT_GROWTH_PATTERNS = [
@@ -309,6 +319,9 @@ OPERATIONAL_NOT_GROWTH_PATTERNS = [
     "код для карточки",
     "классификаторе",
     "поддержка молчит",
+    "поставку развернули",
+    "доп упаковк",
+    "обязательной доп упаковк",
     "надо грузить",
     "штраф иначе",
     "фбс",
@@ -459,6 +472,24 @@ SUPPLIER_AD_PATTERNS = [
     "показ товаров по видеосвязи",
 ]
 
+PRODUCT_RESEARCH_PATTERNS = [
+    "делаю продукт для селлеров",
+    "делаем продукт для селлеров",
+    "продукт для селлеров",
+    "сервис для селлеров",
+    "инструмент для селлеров",
+    "собираю интервью",
+    "собираем интервью",
+    "кастдев",
+    "customer development",
+    "поговорим 20 минут",
+    "поговорить 20 минут",
+    "осталось 7 мест",
+    "мест из 10",
+    "перед тем как тратить месяцы на разработку",
+    "не выкатить никому ненужную штуку",
+]
+
 CHANNEL_AUTHOR_PATTERNS = [
     "подписывайтесь",
     "в канале",
@@ -495,6 +526,12 @@ CONTRACTOR_STRONG_PATTERNS = [
     "помогаем селлерам",
     "настраиваем рекламу",
     "ведем рекламу",
+    "делаю продукт для селлеров",
+    "делаем продукт для селлеров",
+    "собираю интервью",
+    "собираем интервью",
+    "кастдев",
+    "продукт для селлеров",
 ]
 
 OWNER_CONTEXT_PATTERNS = [
@@ -1491,6 +1528,7 @@ def classify_signal(
     hard_editorial_hits = [p for p in HARD_EDITORIAL_PATTERNS if p in text_l]
     market_hits = [p for p in MARKET_OBSERVATION_PATTERNS if p in text_l]
     supplier_hits = [p for p in SUPPLIER_AD_PATTERNS if p in text_l]
+    product_research_hits = [p for p in PRODUCT_RESEARCH_PATTERNS if p in text_l]
     channel_hits = [p for p in CHANNEL_AUTHOR_PATTERNS if p in text_l]
     official_hits = [p for p in OFFICIAL_MARKETPLACE_PATTERNS if p in text_l or p in chat_haystack]
     change_event_hits = [p for p in CHANGE_EVENT_PATTERNS if p in text_l]
@@ -1583,6 +1621,8 @@ def classify_signal(
         promo_penalty += len(bad_chat_hits) * 5
     if hard_noise_hits:
         promo_penalty += 25
+    if product_research_hits:
+        promo_penalty += 35
     if operational_not_growth_hits and not cjm_ceiling_hits and not cjm_economics_hits and not cjm_partner_friction_hits:
         promo_penalty += 18
     promo_penalty += len(expert_hits) * 2
@@ -1609,7 +1649,9 @@ def classify_signal(
     is_editorial = editorial_penalty >= 4 or bool(editorial_hits or channel_hits or official_hits)
     is_soft_discussion = bool(soft_discussion_hits or weak_review_hits or market_hits) and not has_live_problem
 
-    if hard_noise_hits:
+    if product_research_hits:
+        message_type = "service_ad"
+    elif hard_noise_hits:
         message_type = "supplier_ad"
     elif operational_not_growth_hits and not has_cjm_warm_signal and not has_direct_request:
         message_type = "noise"
@@ -1656,6 +1698,7 @@ def classify_signal(
         + marketing_pain_hits
         + explicit_pain_hits
         + explicit_request_hits
+        + product_research_hits
         + cjm_ceiling_hits
         + cjm_economics_hits
         + cjm_safe_step_hits
@@ -1799,7 +1842,11 @@ def classify_signal(
         lead_fit = "warm_hypothesis"
         next_step = "outreach_hypothesis"
         lead_score_100 = min(lead_score_100, 79)
-    if hard_noise_hits or (third_party_hits and not has_own_business_context and not has_direct_request):
+    if product_research_hits:
+        lead_fit = "not_icp"
+        next_step = "ignore"
+        lead_score_100 = min(lead_score_100, 10)
+    elif hard_noise_hits or (third_party_hits and not has_own_business_context and not has_direct_request):
         lead_fit = "not_icp"
         next_step = "ignore"
         lead_score_100 = min(lead_score_100, 20)

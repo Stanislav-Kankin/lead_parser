@@ -22,6 +22,7 @@ from telegram_signals.repository import (
     get_signals,
     get_source_quality_stats,
     list_search_profiles,
+    reclassify_existing_signals,
     save_search_profile,
     set_signal_review_status,
     set_signal_status,
@@ -71,6 +72,7 @@ REVIEW_LABELS = {
 REJECT_REASON_LABELS = {
     "no_own_business": "Нет своего бизнеса",
     "not_icp": "Не ICP",
+    "product_research": "Кастдев / продукт",
     "supplier_or_ad": "Поставщик / реклама",
     "operations_only": "Операционка MP",
     "soft_opinion": "Мнение / обсуждение",
@@ -273,6 +275,28 @@ async def collect_from_dashboard(request: Request, background_tasks: BackgroundT
     if not running:
         background_tasks.add_task(_run_collect_job, profile_id)
     return RedirectResponse("/telegram-signals?review_status=unchecked", status_code=303)
+
+
+@app.post("/telegram-signals/reclassify")
+def reclassify_from_dashboard(request: Request):
+    result = reclassify_existing_signals()
+    with JOB_LOCK:
+        DASHBOARD_JOB.update(
+            {
+                "running": False,
+                "last_started_at": None,
+                "last_finished_at": format_msk(datetime.utcnow()),
+                "last_error": None,
+                "last_result": {
+                    "created": 0,
+                    "created_working": 0,
+                    "updated": result.get("updated", 0),
+                    "scanned_messages": 0,
+                    "total_raw": count_signals(),
+                },
+            }
+        )
+    return RedirectResponse(_return_url(request), status_code=303)
 
 
 @app.get("/telegram-signals/job-status")
@@ -691,13 +715,15 @@ def telegram_signals_dashboard(
 
         actions = [
             _action_form(item.id, "ОК", review_status="ok", tone="ok"),
-            _action_form(item.id, "Прочитал", status="reviewed", review_status="ok"),
             _action_form(item.id, "Написал", status="contacted", review_status="ok", tone="primary"),
             _action_form(item.id, "Ответил", status="replied", review_status="ok"),
+            _action_form(item.id, "Архив", status="dead", review_status="not_ok"),
+        ]
+        more_actions = [
+            _action_form(item.id, "Прочитал", status="reviewed", review_status="ok"),
             _action_form(item.id, "Теплый", status="warm", review_status="ok"),
             _action_form(item.id, "Встреча", status="meeting_booked", review_status="ok"),
             _action_form(item.id, "Продажа", status="sale", review_status="ok"),
-            _action_form(item.id, "Архив", status="dead", review_status="not_ok"),
         ]
         reject_actions = "".join(
             _action_form(item.id, label, review_status="not_ok", reject_reason=reason, tone="danger")
@@ -756,6 +782,10 @@ def telegram_signals_dashboard(
 
               <div class="card-footer">
                 <div class="actions">{"".join(actions)}</div>
+                <details class="more-menu">
+                  <summary>Еще</summary>
+                  <div class="more-actions">{"".join(more_actions)}</div>
+                </details>
                 <details class="reject-menu">
                   <summary>Не ОК: причина</summary>
                   <div class="reject-actions">{reject_actions}</div>
@@ -1090,6 +1120,17 @@ def telegram_signals_dashboard(
           cursor: pointer;
         }}
         .collect-btn:disabled {{ background: #98a2b3; cursor: wait; }}
+        .secondary-btn {{
+          height: 40px;
+          border: 1px solid #cbd5e1;
+          border-radius: 7px;
+          background: #fff;
+          color: #344054;
+          padding: 0 12px;
+          font: inherit;
+          cursor: pointer;
+          white-space: nowrap;
+        }}
         .job-status {{ flex: 1; color: var(--muted); }}
         .job-error {{ color: var(--red); }}
         .job-running {{ color: var(--blue); }}
@@ -1213,36 +1254,42 @@ def telegram_signals_dashboard(
           margin-top: 14px;
           padding-top: 12px;
         }}
-        .actions, .links, .reject-actions {{ display: flex; flex-wrap: wrap; gap: 8px; }}
+        .actions, .links, .reject-actions, .more-actions {{ display: flex; flex-wrap: wrap; gap: 8px; }}
         .inline-form {{ display: inline; margin: 0; }}
-        .reject-menu {{
+        .reject-menu, .more-menu {{
           position: relative;
-          margin-left: auto;
         }}
-        .reject-menu summary {{
+        .reject-menu {{ margin-left: auto; }}
+        .reject-menu summary, .more-menu summary {{
           min-height: 34px;
           display: inline-flex;
           align-items: center;
-          border: 1px solid #fecdd3;
+          border: 1px solid #cbd5e1;
           border-radius: 7px;
-          background: #fff1f3;
-          color: var(--red);
+          background: #fff;
+          color: #344054;
           padding: 0 10px;
           cursor: pointer;
           white-space: nowrap;
         }}
-        .reject-actions {{
+        .reject-menu summary {{
+          border-color: #fecdd3;
+          background: #fff1f3;
+          color: var(--red);
+        }}
+        .reject-actions, .more-actions {{
           position: absolute;
           z-index: 30;
           right: 0;
           top: 40px;
-          width: 320px;
-          border: 1px solid #fecdd3;
+          width: 280px;
+          border: 1px solid #cbd5e1;
           border-radius: 8px;
           background: #fff;
           box-shadow: 0 12px 28px rgba(16, 24, 40, .16);
           padding: 8px;
         }}
+        .reject-actions {{ width: 320px; border-color: #fecdd3; }}
         .crm-form {{
           display: grid;
           grid-template-columns: 140px 160px 130px 170px minmax(260px, 1fr) auto;
@@ -1351,7 +1398,7 @@ def telegram_signals_dashboard(
         .toolbar {{ padding: 10px; margin-bottom: 10px; align-items: center; }}
         .collect-form {{ display: flex; gap: 8px; align-items: center; }}
         .collect-form select {{ width: 220px; margin-right: 0; }}
-        .collect-btn {{ height: 36px; }}
+        .collect-btn, .secondary-btn {{ height: 36px; }}
         .quick-nav {{ gap: 6px; margin-bottom: 10px; }}
         .quick-link {{ min-height: 30px; padding: 0 9px; font-size: 13px; }}
         .exports {{ margin-bottom: 10px; }}
@@ -1416,6 +1463,9 @@ def telegram_signals_dashboard(
           <form method="post" action="/telegram-signals/collect" class="collect-form">
             <select name="profile_id">{profile_options}</select>
             <button type="submit" class="collect-btn" {"disabled" if job["running"] else ""}>Запустить сбор лидов</button>
+          </form>
+          <form method="post" action="/telegram-signals/reclassify" class="collect-form">
+            <button type="submit" class="secondary-btn">Пересчитать базу</button>
           </form>
           <div class="job-status {job_class}">{escape(job_text)}</div>
         </section>

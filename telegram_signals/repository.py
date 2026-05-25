@@ -7,6 +7,7 @@ from datetime import datetime
 from sqlalchemy import case, desc, func, or_, select
 
 from storage.db import SessionLocal
+from telegram_signals.signal_classifier import classify_signal
 from .models import SearchProfile, TelegramSignal, TelegramSignalComment
 
 WORKING_LEAD_FITS = ["hot_outreach", "warm_reply", "warm_hypothesis", "target", "review"]
@@ -99,6 +100,86 @@ def save_signals(items: Iterable[dict]) -> dict:
         session.commit()
 
     return {"created": created, "updated": updated}
+
+
+RECLASSIFY_FIELDS = [
+    "matched_keywords",
+    "signal_score",
+    "signal_level",
+    "recommended_opener",
+    "conversation_score",
+    "pain_detected",
+    "icp_detected",
+    "message_type",
+    "conversation_type",
+    "author_type_guess",
+    "icp_score",
+    "pain_score",
+    "intent_score",
+    "context_score",
+    "owner_likelihood_score",
+    "promo_penalty",
+    "contractor_penalty",
+    "final_lead_score",
+    "contactability_score",
+    "contact_entity_type",
+    "contact_entity_score",
+    "is_person_reachable",
+    "lead_fit",
+    "next_step",
+    "why_actionable",
+    "company_hint",
+    "website_hint",
+    "contact_hint",
+    "outreach_segment",
+    "outreach_stage",
+    "outreach_angle",
+    "bridge_to_offer",
+    "best_reply_draft",
+    "next_question",
+    "reply_tone",
+    "lead_category",
+    "lead_score_100",
+    "likely_icp",
+    "marketplace",
+    "niche",
+    "budget_hint",
+    "urgency",
+    "opener_soft",
+    "opener_expert",
+    "opener_sales",
+    "is_actionable",
+]
+
+
+def reclassify_existing_signals(limit: int | None = None) -> dict:
+    updated = 0
+    with SessionLocal() as session:
+        stmt = select(TelegramSignal).order_by(desc(TelegramSignal.created_at), desc(TelegramSignal.id))
+        if limit:
+            stmt = stmt.limit(limit)
+        items = list(session.execute(stmt).scalars().all())
+        for item in items:
+            signal = classify_signal(
+                item.message_text or "",
+                item.segment or "ecom_marketplace_pain",
+                context_text="",
+                conversation_text="",
+                author_username=item.author_username,
+                author_name=item.author_name,
+                chat_title=item.chat_title,
+                chat_username=item.chat_username,
+                reply_depth=item.reply_depth or 0,
+            )
+            matched = signal.get("matched_keywords")
+            if isinstance(matched, list):
+                signal["matched_keywords"] = ",".join(str(value) for value in matched if value)
+            for field in RECLASSIFY_FIELDS:
+                if field in signal:
+                    setattr(item, field, signal[field])
+            updated += 1
+        session.commit()
+    return {"updated": updated}
 
 
 def get_signals(
