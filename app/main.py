@@ -12,7 +12,7 @@ from fastapi.responses import FileResponse, HTMLResponse, RedirectResponse
 
 from storage.db import init_db
 from telegram_signals.exporter import export_signals_to_xlsx
-from telegram_signals.keywords import SEGMENT_LABELS
+from telegram_signals.keywords import CHAT_BAD_HINTS, CHAT_DISCOVERY_KEYWORDS, CHAT_GOOD_HINTS, SEGMENT_LABELS
 from telegram_signals.repository import (
     WORKING_LEAD_FITS,
     count_signals,
@@ -310,41 +310,67 @@ async def save_settings_profile(request: Request):
 @app.get("/telegram-signals/settings", response_class=HTMLResponse)
 def search_settings_dashboard():
     profiles = list_search_profiles()
-    segment_options = "".join(
-        f"<option value='{escape(value)}'>{escape(label)}</option>"
-        for value, label in SEGMENT_LABELS.items()
-    )
+
+    def render_profile_form(profile=None) -> str:
+        is_new = profile is None
+        profile_id = "" if is_new else f'<input type="hidden" name="profile_id" value="{profile.id}">'
+        current_segment = "ecom_marketplace_pain" if is_new else profile.segment
+        name = "Маркетплейсы: явная боль" if is_new else profile.name or ""
+        queries = "\n".join(CHAT_DISCOVERY_KEYWORDS.get(current_segment, [])) if is_new else profile.queries_text or ""
+        stop_words = "" if is_new else profile.stop_words_text or ""
+        good_hints = "\n".join(CHAT_GOOD_HINTS) if is_new else profile.good_chat_hints_text or ""
+        bad_hints = "\n".join(CHAT_BAD_HINTS) if is_new else profile.bad_chat_hints_text or ""
+        max_age_hours = 96 if is_new else profile.max_age_hours
+        limit_chats = 10 if is_new else profile.limit_chats
+        limit_messages = 80 if is_new else profile.limit_messages_per_chat
+        min_score = 60 if is_new else profile.min_score
+        is_active = True if is_new else bool(profile.is_active)
+        title = "Новый профиль" if is_new else escape(name)
+        submit_label = "Создать профиль" if is_new else "Сохранить"
+        active_label = "Включен" if is_active else "Выключен"
+
+        return f"""
+        <article class="profile-card">
+          <form method="post" action="/telegram-signals/settings">
+            {profile_id}
+            <div class="profile-head">
+              <div>
+                <div class="eyebrow">{escape(active_label)}</div>
+                <h2>{title}</h2>
+              </div>
+              <button class="primary-btn" type="submit">{submit_label}</button>
+            </div>
+
+            <div class="compact-grid">
+              <label>Название <input name="name" value="{escape(name)}"></label>
+              <label>Сегмент <select name="segment">
+                {"".join(f"<option value='{escape(value)}' {_selected(current_segment, value)}>{escape(label)}</option>" for value, label in SEGMENT_LABELS.items())}
+              </select></label>
+              <label>Мин. score <input type="number" name="min_score" value="{min_score}" min="0" max="100"></label>
+              <label>Период, ч <input type="number" name="max_age_hours" value="{max_age_hours}" min="1"></label>
+              <label>Чатов <input type="number" name="limit_chats" value="{limit_chats}" min="1"></label>
+              <label>Сообщений <input type="number" name="limit_messages_per_chat" value="{limit_messages}" min="1"></label>
+              <label class="check"><input type="checkbox" name="is_active" {_checked(is_active)}> Активен</label>
+            </div>
+
+            <div class="signal-rule">
+              <b>Рабочий лид:</b> селлер или бренд WB/Ozon + личная боль/запрос + понятный мост к сайту, Direct, Киту или экономике.
+              <span>Общие рассуждения, новости, кейсы и советы без запроса уходят в сырье или отсекаются.</span>
+            </div>
+
+            <div class="textarea-grid">
+              <label>Где искать каналы <textarea name="queries_text" spellcheck="false">{escape(queries)}</textarea></label>
+              <label>Минус-слова сообщений <textarea name="stop_words_text" spellcheck="false" placeholder="новость&#10;вебинар&#10;вакансия&#10;мне кажется&#10;кейсы по выбору ниши">{escape(stop_words)}</textarea></label>
+              <label>Плюс-слова в названии чата <textarea name="good_chat_hints_text" spellcheck="false">{escape(good_hints)}</textarea></label>
+              <label>Минус-слова в названии чата <textarea name="bad_chat_hints_text" spellcheck="false">{escape(bad_hints)}</textarea></label>
+            </div>
+          </form>
+        </article>
+        """
+
     profile_cards = []
     for profile in profiles:
-        profile_cards.append(
-            f"""
-            <article class="settings-card">
-              <form method="post" action="/telegram-signals/settings">
-                <input type="hidden" name="profile_id" value="{profile.id}">
-                <div class="settings-grid">
-                  <label>Название <input name="name" value="{escape(profile.name or '')}"></label>
-                  <label>Сегмент <select name="segment">
-                    {"".join(f"<option value='{escape(value)}' {_selected(profile.segment, value)}>{escape(label)}</option>" for value, label in SEGMENT_LABELS.items())}
-                  </select></label>
-                  <label>Свежесть, часов <input type="number" name="max_age_hours" value="{profile.max_age_hours}" min="1"></label>
-                  <label>Чатов на запрос <input type="number" name="limit_chats" value="{profile.limit_chats}" min="1"></label>
-                  <label>Сообщений на чат <input type="number" name="limit_messages_per_chat" value="{profile.limit_messages_per_chat}" min="1"></label>
-                  <label>Мин. score <input type="number" name="min_score" value="{profile.min_score}" min="0" max="100"></label>
-                  <label class="check"><input type="checkbox" name="is_active" {_checked(bool(profile.is_active))}> Активен</label>
-                </div>
-                <div class="textarea-grid">
-                  <label>Запросы Telegram <textarea name="queries_text">{escape(profile.queries_text or '')}</textarea></label>
-                  <label>Стоп-слова сообщений <textarea name="stop_words_text">{escape(profile.stop_words_text or '')}</textarea></label>
-                  <label>Хорошие слова в названии чата <textarea name="good_chat_hints_text">{escape(profile.good_chat_hints_text or '')}</textarea></label>
-                  <label>Плохие слова в названии чата <textarea name="bad_chat_hints_text">{escape(profile.bad_chat_hints_text or '')}</textarea></label>
-                </div>
-                <div class="settings-actions">
-                  <button class="filter-btn" type="submit">Сохранить профиль</button>
-                </div>
-              </form>
-            </article>
-            """
-        )
+        profile_cards.append(render_profile_form(profile))
 
     return f"""
     <!doctype html>
@@ -354,57 +380,59 @@ def search_settings_dashboard():
       <meta name="viewport" content="width=device-width, initial-scale=1" />
       <title>Настройки поиска</title>
       <style>
-        body {{ margin: 0; background: #eef3f7; color: #17202a; font: 14px/1.45 Inter, -apple-system, BlinkMacSystemFont, "Segoe UI", Arial, sans-serif; }}
-        .page {{ max-width: 1240px; margin: 0 auto; padding: 28px 24px 48px; }}
-        a {{ color: #2563eb; }}
-        h1 {{ margin: 0 0 8px; font-size: 32px; }}
-        .subtitle {{ color: #667085; margin-bottom: 18px; }}
-        .settings-card {{ background: #fff; border: 1px solid #d9e2ec; border-radius: 8px; padding: 16px; margin-bottom: 14px; }}
-        .settings-grid {{ display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 10px; align-items: end; }}
-        .textarea-grid {{ display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; margin-top: 12px; }}
-        label {{ display: grid; gap: 5px; color: #667085; font-size: 12px; }}
-        input, select, textarea {{ width: 100%; border: 1px solid #cbd5e1; border-radius: 7px; padding: 8px 10px; font: inherit; color: #17202a; background: #fff; }}
-        input, select {{ height: 38px; }}
-        textarea {{ min-height: 120px; resize: vertical; }}
-        .check {{ display: flex; align-items: center; gap: 8px; height: 38px; color: #17202a; }}
+        :root {{ --bg: #f4f7fb; --panel: #fff; --text: #17202a; --muted: #667085; --line: #d9e2ec; --blue: #2563eb; --green: #0f9f6e; }}
+        * {{ box-sizing: border-box; }}
+        body {{ margin: 0; background: var(--bg); color: var(--text); font: 14px/1.45 Inter, -apple-system, BlinkMacSystemFont, "Segoe UI", Arial, sans-serif; }}
+        .page {{ max-width: 1320px; margin: 0 auto; padding: 22px 20px 44px; }}
+        a {{ color: var(--blue); text-decoration: none; }}
+        h1 {{ margin: 0; font-size: 28px; letter-spacing: 0; }}
+        h2 {{ margin: 2px 0 0; font-size: 18px; letter-spacing: 0; }}
+        .subtitle {{ color: var(--muted); margin-top: 6px; max-width: 820px; }}
+        .topbar {{ display: flex; justify-content: space-between; gap: 16px; align-items: flex-start; margin-bottom: 14px; }}
+        .top-actions {{ display: flex; flex-wrap: wrap; gap: 8px; justify-content: flex-end; }}
+        .link-btn, .primary-btn {{ min-height: 36px; display: inline-flex; align-items: center; border-radius: 7px; padding: 0 12px; font: inherit; cursor: pointer; white-space: nowrap; }}
+        .link-btn {{ border: 1px solid var(--line); background: #fff; color: #344054; }}
+        .primary-btn {{ border: 0; background: var(--blue); color: #fff; font-weight: 700; }}
+        .preset-row {{ display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px; margin-bottom: 12px; }}
+        .preset {{ background: #fff; border: 1px solid var(--line); border-radius: 8px; padding: 12px; }}
+        .preset b {{ display: block; margin-bottom: 3px; }}
+        .preset span {{ color: var(--muted); font-size: 12px; }}
+        .profile-card {{ background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: 14px; margin-bottom: 12px; box-shadow: 0 1px 2px rgba(16, 24, 40, .04); }}
+        .profile-head {{ display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 10px; }}
+        .eyebrow {{ color: var(--green); font-size: 11px; font-weight: 800; text-transform: uppercase; }}
+        .compact-grid {{ display: grid; grid-template-columns: minmax(220px, 1.4fr) minmax(190px, 1fr) 96px 96px 88px 112px 104px; gap: 8px; align-items: end; }}
+        .textarea-grid {{ display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 8px; margin-top: 10px; }}
+        .signal-rule {{ display: flex; flex-wrap: wrap; gap: 8px 12px; align-items: center; border: 1px solid #bbf7d0; background: #f0fdf4; color: #166534; border-radius: 8px; padding: 8px 10px; font-size: 13px; }}
+        .signal-rule span {{ color: #47715a; }}
+        label {{ display: grid; gap: 5px; color: var(--muted); font-size: 12px; }}
+        input, select, textarea {{ width: 100%; border: 1px solid #cbd5e1; border-radius: 7px; padding: 8px 10px; font: inherit; color: var(--text); background: #fff; }}
+        input, select {{ height: 36px; }}
+        textarea {{ min-height: 118px; resize: vertical; line-height: 1.35; }}
+        .check {{ display: flex; align-items: center; gap: 8px; height: 36px; color: var(--text); }}
         .check input {{ width: 16px; height: 16px; }}
-        .filter-btn {{ border: 0; border-radius: 7px; background: #2563eb; color: #fff; min-height: 38px; padding: 0 14px; cursor: pointer; font: inherit; font-weight: 700; }}
-        .settings-actions {{ margin-top: 12px; }}
-        .topbar {{ display: flex; justify-content: space-between; gap: 16px; align-items: center; margin-bottom: 18px; }}
-        @media (max-width: 900px) {{ .settings-grid, .textarea-grid {{ grid-template-columns: 1fr; }} }}
+        @media (max-width: 1180px) {{ .compact-grid, .textarea-grid, .preset-row {{ grid-template-columns: repeat(2, minmax(0, 1fr)); }} }}
+        @media (max-width: 760px) {{ .topbar {{ display: block; }} .top-actions {{ justify-content: flex-start; margin-top: 12px; }} .compact-grid, .textarea-grid, .preset-row {{ grid-template-columns: 1fr; }} }}
       </style>
     </head>
     <body>
       <main class="page">
         <div class="topbar">
           <div>
-            <h1>Настройки поиска</h1>
-            <div class="subtitle">Профили управляют тем, кого искать, по каким запросам, за какой период и с какими стоп-словами.</div>
+            <h1>Настройка поиска сигналов</h1>
+            <div class="subtitle">Сначала находим релевантные каналы селлеров, потом пропускаем только сообщения с явной болью или прямым запросом на помощь.</div>
           </div>
-          <a href="/telegram-signals">Вернуться к базе лидов</a>
+          <div class="top-actions">
+            <a class="link-btn" href="/telegram-signals">База лидов</a>
+            <a class="link-btn" href="/telegram-signals?view=raw">Сырье</a>
+          </div>
         </div>
+        <section class="preset-row">
+          <div class="preset"><b>1. Каналы</b><span>Запросы ищут чаты селлеров, брендов и интернет-магазинов, а не общие маркетинговые форумы.</span></div>
+          <div class="preset"><b>2. Сигнал</b><span>В рабочую базу попадает только личная боль: не сходится экономика, нет продаж, ищут подрядчика или direct.</span></div>
+          <div class="preset"><b>3. Отсев</b><span>Новости, рассуждения, кейсы, вакансии, обучение и поставщики режутся минус-словами и скорингом.</span></div>
+        </section>
         {"".join(profile_cards)}
-        <article class="settings-card">
-          <h2>Новый профиль</h2>
-          <form method="post" action="/telegram-signals/settings">
-            <div class="settings-grid">
-              <label>Название <input name="name" value="Новый профиль"></label>
-              <label>Сегмент <select name="segment">{segment_options}</select></label>
-              <label>Свежесть, часов <input type="number" name="max_age_hours" value="96" min="1"></label>
-              <label>Чатов на запрос <input type="number" name="limit_chats" value="12" min="1"></label>
-              <label>Сообщений на чат <input type="number" name="limit_messages_per_chat" value="80" min="1"></label>
-              <label>Мин. score <input type="number" name="min_score" value="0" min="0" max="100"></label>
-              <label class="check"><input type="checkbox" name="is_active" checked> Активен</label>
-            </div>
-            <div class="textarea-grid">
-              <label>Запросы Telegram <textarea name="queries_text"></textarea></label>
-              <label>Стоп-слова сообщений <textarea name="stop_words_text"></textarea></label>
-              <label>Хорошие слова в названии чата <textarea name="good_chat_hints_text"></textarea></label>
-              <label>Плохие слова в названии чата <textarea name="bad_chat_hints_text"></textarea></label>
-            </div>
-            <div class="settings-actions"><button class="filter-btn" type="submit">Создать профиль</button></div>
-          </form>
-        </article>
+        {render_profile_form()}
       </main>
     </body>
     </html>

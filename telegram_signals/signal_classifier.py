@@ -51,9 +51,13 @@ FIRST_PERSON_PAIN_PATTERNS = [
 EXPERT_CONTENT_PATTERNS = [
     "что нужно знать",
     "вот мой ответ",
+    "мой ответ",
     "разбер",
     "в этой статье",
     "я написал",
+    "как я",
+    "обучающий курс",
+    "обучающих курса",
     "сегодня поговорим",
     "объясняю",
     "рассказываю",
@@ -111,6 +115,107 @@ MARKET_OBSERVATION_PATTERNS = [
     "исследование",
     "новый закон",
     "новые правила",
+]
+
+SOFT_DISCUSSION_PATTERNS = [
+    "мне кажется",
+    "вот чот",
+    "первый верно говорит",
+    "давненько была история",
+    "условно",
+    "особенно для бизнесов",
+    "инфа по спросу",
+    "кейсы по выбору ниши",
+    "в любой нише",
+    "вся стата накоплена",
+    "просто мысл",
+    "наблюдение",
+    "по крайней мере",
+    "пока не работает",
+    "ищу подходы",
+]
+
+EXPLICIT_SELLER_PAIN_PATTERNS = [
+    "у нас не окупается",
+    "у меня не окупается",
+    "у нас не сходится",
+    "у меня не сходится",
+    "экономика не сходится",
+    "не выходим в плюс",
+    "работаем в минус",
+    "реклама не окупается",
+    "сливаем бюджет",
+    "дорогой трафик",
+    "дорогая реклама",
+    "дрр растет",
+    "дрр вырос",
+    "ставки растут",
+    "цена клика растет",
+    "комиссия съедает",
+    "комиссии съедают",
+    "съедает маржу",
+    "съедают маржу",
+    "съедает прибыль",
+    "съедают прибыль",
+    "маржа падает",
+    "маржи не остается",
+    "продаж нет",
+    "нет продаж",
+    "продажи просели",
+    "продажи упали",
+    "много возвратов",
+    "возвраты съедают",
+    "нет повторных продаж",
+    "нет клиентской базы",
+    "нет данных о покупателях",
+    "зависим от wb",
+    "зависим от ozon",
+    "зависимость от маркетплейсов",
+    "хотим меньше зависеть",
+]
+
+EXPLICIT_HELP_REQUEST_PATTERNS = [
+    "кто поможет",
+    "кого посоветуете",
+    "кто посоветует",
+    "посоветуйте",
+    "подскажите",
+    "помогите разобраться",
+    "ищем подрядчика",
+    "ищем агентство",
+    "ищем маркетолога",
+    "нужен подрядчик",
+    "нужен маркетолог",
+    "нужен директолог",
+    "нужен трафик",
+    "ищем решение",
+    "кто запускал",
+    "кто пробовал",
+    "кто работал",
+    "как решить",
+    "что делать",
+    "как выйти в плюс",
+    "как снизить дрр",
+]
+
+SELLER_CONTEXT_PATTERNS = [
+    "wb",
+    "wildberries",
+    "ozon",
+    "маркетплейс",
+    "селлер",
+    "seller",
+    "карточк",
+    "sku",
+    "личный кабинет",
+    "комисси",
+    "внутренняя реклама",
+    "ддр",
+    "дрр",
+    "интернет-магазин",
+    "свой сайт",
+    "яндекс кит",
+    "яндекс.кит",
 ]
 
 SUPPLIER_AD_PATTERNS = [
@@ -231,8 +336,12 @@ MARKETING_PAIN_PATTERNS = [
     "не сходится",
     "сливаем бюджет",
     "реклама не окупается",
+    "экономика не сходится",
     "маржа падает",
     "комиссия съедает",
+    "комиссии съедают",
+    "съедает маржу",
+    "съедают маржу",
     "зависим от wb",
     "зависим от ozon",
     "зависимость от маркетплейсов",
@@ -241,6 +350,8 @@ MARKETING_PAIN_PATTERNS = [
     "внутренняя реклама",
     "цена клика",
     "ставки растут",
+    "дрр растет",
+    "дрр вырос",
     "штрафы",
     "стоимость возвратов",
     "возвраты съедают",
@@ -266,6 +377,8 @@ MARKETING_PAIN_PATTERNS = [
     "нужен трафик",
     "реклама идет",
     "продажи остановились",
+    "продажи просели",
+    "продажи упали",
     "продаж нет",
     "позиции есть",
     "трафик есть",
@@ -374,7 +487,12 @@ OPERATIONAL_PAIN_PATTERNS = [
     "продавцу",
     "реклама идет",
     "реклама идёт",
+    "реклама не окупается",
+    "дрр растет",
+    "дрр вырос",
     "продажи остановились",
+    "продажи просели",
+    "продажи упали",
     "позиции есть",
     "карточка в топе",
     "трафик есть",
@@ -398,6 +516,14 @@ WEAK_REVIEW_PATTERNS = [
     "продаем оптом",
     "минимальный заказ",
     "прайс",
+    "мне кажется",
+    "условно",
+    "инфа по спросу",
+    "кейсы по выбору ниши",
+    "в любой нише",
+    "стата накоплена",
+    "не показывается тг по ключам",
+    "списки из библиотеки",
 ]
 
 
@@ -904,7 +1030,9 @@ def _fit_from_score(
     contact_entity_type: str,
     has_live_problem: bool,
 ) -> tuple[str, str]:
-    if message_type in {"expert_content", "service_ad", "supplier_ad", "vacancy", "noise"} and not has_live_problem:
+    if message_type in {"expert_content", "service_ad", "supplier_ad", "vacancy"}:
+        return "not_icp", "ignore"
+    if message_type == "noise" and not has_live_problem:
         return "not_icp", "ignore"
     if contact_entity_type in {"channel", "bot"} and not has_live_problem:
         return "market_insight", "use_as_context"
@@ -1150,6 +1278,10 @@ def classify_signal(
     marketing_pain_hits = [p for p in MARKETING_PAIN_PATTERNS if p in text_l]
     live_help_hits = [p for p in LIVE_HELP_PATTERNS if p in text_l]
     operational_hits = [p for p in OPERATIONAL_PAIN_PATTERNS if p in text_l]
+    soft_discussion_hits = [p for p in SOFT_DISCUSSION_PATTERNS if p in text_l]
+    explicit_pain_hits = [p for p in EXPLICIT_SELLER_PAIN_PATTERNS if p in text_l]
+    explicit_request_hits = [p for p in EXPLICIT_HELP_REQUEST_PATTERNS if p in text_l]
+    seller_context_hits = [p for p in SELLER_CONTEXT_PATTERNS if p in full_l]
 
     first_person_pain_score = len(first_person_hits) * 3
     live_help_score = len(live_help_hits) * 3
@@ -1167,8 +1299,8 @@ def classify_signal(
             if reply_keyword_hits:
                 participant_score += 5
 
-    pain_score = len(pain_hits) * 3 + len(marketing_pain_hits) * 2 + first_person_pain_score + live_help_score + operational_score
-    intent_score = len(intent_hits) * 4 + len(change_event_hits) * 2 + len(live_help_hits) * 2
+    pain_score = len(pain_hits) * 3 + len(marketing_pain_hits) * 2 + len(explicit_pain_hits) * 4 + first_person_pain_score + live_help_score + operational_score
+    intent_score = len(intent_hits) * 4 + len(change_event_hits) * 2 + len(explicit_request_hits) * 4 + len(live_help_hits) * 2
     icp_score = len(direct_hits) * 2 + len(brand_hits) * 2 + len(owner_role_hits) * 2 + len(business_scope_hits)
 
     if any(x in full_l for x in ["wb", "ozon", "маркетплейс", "селлер", "seller", "sku", "карточк", "интернет-магазин", "сайт"]):
@@ -1202,12 +1334,19 @@ def classify_signal(
         promo_penalty += 6
     if weak_review_hits:
         promo_penalty += 5
+    if soft_discussion_hits and not explicit_pain_hits and not explicit_request_hits:
+        promo_penalty += len(soft_discussion_hits) * 4
     promo_penalty += len(expert_hits) * 2
     if "рекламщик" in chat_title_l or "capital" in chat_title_l:
         promo_penalty += 3
 
-    has_live_problem = bool(first_person_hits or live_help_hits or operational_hits)
+    strong_first_person_hits = [p for p in first_person_hits if p not in {"мне", "мой", "мои", "наш", "наши"}]
+    has_seller_context = bool(seller_context_hits or direct_hits or brand_hits or business_scope_hits)
+    has_personal_commercial_context = bool(strong_first_person_hits and (pain_hits or marketing_pain_hits or operational_hits or change_event_hits or direct_hits or brand_hits))
+    has_live_problem = bool(explicit_pain_hits or explicit_request_hits or live_help_hits or has_personal_commercial_context)
+    has_strong_commercial_signal = bool(has_live_problem and has_seller_context)
     is_editorial = editorial_penalty >= 4 or bool(editorial_hits or channel_hits or official_hits)
+    is_soft_discussion = bool(soft_discussion_hits or weak_review_hits or market_hits) and not has_live_problem
 
     if hard_editorial_hits:
         message_type = "expert_content"
@@ -1217,10 +1356,14 @@ def classify_signal(
         message_type = "vacancy"
     elif supplier_hits or weak_review_hits:
         message_type = "supplier_ad"
+    elif is_soft_discussion:
+        message_type = "market_intelligence" if has_seller_context else "noise"
     elif is_editorial and not has_live_problem:
         message_type = "expert_content"
     elif author_type_guess == "contractor" and not pain_hits and not intent_hits and not change_event_hits and not live_help_hits:
         message_type = "service_ad"
+    elif expert_hits and not (explicit_pain_hits or explicit_request_hits or live_help_hits):
+        message_type = "expert_content"
     elif reply_depth >= 1 and has_live_problem and (pain_hits or intent_hits or direct_hits or brand_hits or change_event_hits or marketing_pain_hits or live_help_hits):
         message_type = "participant_pain"
     elif has_live_problem and (pain_hits or intent_hits or direct_hits or brand_hits or change_event_hits or marketing_pain_hits or live_help_hits):
@@ -1236,7 +1379,7 @@ def classify_signal(
 
     conversation_type = _guess_conversation_type(full_l, bool(intent_hits or live_help_hits), bool(pain_hits or marketing_pain_hits or operational_hits), author_type_guess)
 
-    matched = pain_hits + intent_hits + direct_hits + brand_hits + first_person_hits + change_event_hits + marketing_pain_hits + live_help_hits + operational_hits
+    matched = pain_hits + intent_hits + direct_hits + brand_hits + first_person_hits + change_event_hits + marketing_pain_hits + explicit_pain_hits + explicit_request_hits + live_help_hits + operational_hits
     seen: list[str] = []
     matched_keywords: list[str] = []
     for keyword in matched:
@@ -1244,7 +1387,7 @@ def classify_signal(
             seen.append(keyword)
             matched_keywords.append(keyword)
 
-    pain_detected = sorted({kw for kw in pain_hits + first_person_hits + marketing_pain_hits + live_help_hits + operational_hits})
+    pain_detected = sorted({kw for kw in pain_hits + first_person_hits + marketing_pain_hits + explicit_pain_hits + live_help_hits + operational_hits})
     icp_detected = sorted({kw for kw in direct_hits + brand_hits + business_scope_hits + owner_role_hits})
 
     contact_entity_type, contact_entity_score, is_person_reachable = _classify_contact_entity(
@@ -1347,6 +1490,8 @@ def classify_signal(
         urgency=urgency,
         budget_hint=budget_hint,
     )
+    if not has_strong_commercial_signal and lead_score_100 > 35:
+        lead_score_100 = 35
     lead_fit, next_step = _fit_from_score(
         lead_score_100,
         bridge_to_offer,

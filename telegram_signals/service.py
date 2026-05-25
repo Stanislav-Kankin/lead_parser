@@ -254,7 +254,9 @@ async def collect_signals(
 
                 lead_fit = str(signal.get("lead_fit") or "noise")
                 signal_level = _signal_level(signal)
-                if lead_fit == "noise" and signal_level == "low":
+                if lead_fit in {"noise", "not_icp"} and signal_level == "low":
+                    continue
+                if lead_fit in {"not_icp", "market_insight"} and int(signal.get("lead_score_100", 0) or 0) < 40:
                     continue
                 if min_score and int(signal.get("lead_score_100", 0) or 0) < min_score:
                     continue

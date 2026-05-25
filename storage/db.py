@@ -195,7 +195,7 @@ def _ensure_default_search_profiles():
                     max_age_hours=96,
                     limit_chats=12,
                     limit_messages_per_chat=80,
-                    min_score=0,
+                    min_score=60,
                     is_active=True,
                 )
             )
