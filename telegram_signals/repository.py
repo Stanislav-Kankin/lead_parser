@@ -112,6 +112,7 @@ def get_signals(
     lead_fit_in: list[str] | None = None,
     review_status: str | None = None,
     review_status_in: list[str] | None = None,
+    reject_reason: str | None = None,
     status: str | None = None,
     status_not: str | None = None,
     crm_tag: str | None = None,
@@ -139,6 +140,8 @@ def get_signals(
             stmt = stmt.where(TelegramSignal.review_status == review_status)
         if review_status_in:
             stmt = stmt.where(TelegramSignal.review_status.in_(review_status_in))
+        if reject_reason:
+            stmt = stmt.where(TelegramSignal.reject_reason == reject_reason)
         if status:
             stmt = stmt.where(TelegramSignal.status == status)
         if status_not:
@@ -192,6 +195,7 @@ def count_signals(
     *,
     lead_fit_in: list[str] | None = None,
     review_status: str | None = None,
+    reject_reason: str | None = None,
     status: str | None = None,
     crm_tag: str | None = None,
     min_score: int | None = None,
@@ -205,6 +209,8 @@ def count_signals(
             stmt = stmt.where(TelegramSignal.lead_fit.in_(lead_fit_in))
         if review_status:
             stmt = stmt.where(TelegramSignal.review_status == review_status)
+        if reject_reason:
+            stmt = stmt.where(TelegramSignal.reject_reason == reject_reason)
         if status:
             stmt = stmt.where(TelegramSignal.status == status)
         if crm_tag:
@@ -225,6 +231,83 @@ def count_signals(
         if lead_category:
             stmt = stmt.where(TelegramSignal.lead_category == lead_category)
         return int(session.execute(stmt).scalar_one() or 0)
+
+
+def get_reject_reason_stats() -> list[dict]:
+    with SessionLocal() as session:
+        reason = func.coalesce(TelegramSignal.reject_reason, "unknown")
+        stmt = (
+            select(
+                reason.label("reason"),
+                func.count(TelegramSignal.id).label("total"),
+                func.avg(TelegramSignal.lead_score_100).label("avg_score"),
+            )
+            .where(TelegramSignal.review_status == "not_ok")
+            .group_by(reason)
+            .order_by(desc(func.count(TelegramSignal.id)))
+        )
+        return [
+            {
+                "reason": row.reason,
+                "total": int(row.total or 0),
+                "avg_score": round(float(row.avg_score or 0)),
+            }
+            for row in session.execute(stmt).all()
+        ]
+
+
+def get_source_quality_stats(limit: int = 40, min_total: int = 1) -> list[dict]:
+    with SessionLocal() as session:
+        total_count = func.count(TelegramSignal.id)
+        ok_count = func.sum(case((TelegramSignal.review_status == "ok", 1), else_=0))
+        not_ok_count = func.sum(case((TelegramSignal.review_status == "not_ok", 1), else_=0))
+        unchecked_count = func.sum(case((TelegramSignal.review_status == "unchecked", 1), else_=0))
+        working_count = func.sum(case((TelegramSignal.lead_fit.in_(WORKING_LEAD_FITS), 1), else_=0))
+        hot_count = func.sum(case((TelegramSignal.lead_score_100 >= 80, 1), else_=0))
+        reachable_count = func.sum(case((TelegramSignal.is_person_reachable == True, 1), else_=0))  # noqa: E712
+        avg_score = func.avg(TelegramSignal.lead_score_100)
+
+        stmt = (
+            select(
+                TelegramSignal.chat_title.label("chat_title"),
+                TelegramSignal.chat_username.label("chat_username"),
+                total_count.label("total"),
+                ok_count.label("ok"),
+                not_ok_count.label("not_ok"),
+                unchecked_count.label("unchecked"),
+                working_count.label("working"),
+                hot_count.label("hot"),
+                reachable_count.label("reachable"),
+                avg_score.label("avg_score"),
+            )
+            .where(TelegramSignal.chat_title.is_not(None))
+            .group_by(TelegramSignal.chat_title, TelegramSignal.chat_username)
+            .having(total_count >= min_total)
+            .order_by(desc(ok_count), desc(hot_count), desc(avg_score), desc(total_count))
+            .limit(limit)
+        )
+        rows = []
+        for row in session.execute(stmt).all():
+            total = int(row.total or 0)
+            ok = int(row.ok or 0)
+            not_ok = int(row.not_ok or 0)
+            rows.append(
+                {
+                    "chat_title": row.chat_title or "Без названия",
+                    "chat_username": row.chat_username or "",
+                    "total": total,
+                    "ok": ok,
+                    "not_ok": not_ok,
+                    "unchecked": int(row.unchecked or 0),
+                    "working": int(row.working or 0),
+                    "hot": int(row.hot or 0),
+                    "reachable": int(row.reachable or 0),
+                    "avg_score": round(float(row.avg_score or 0)),
+                    "ok_rate": round(ok * 100 / total) if total else 0,
+                    "reject_rate": round(not_ok * 100 / total) if total else 0,
+                }
+            )
+        return rows
 
 
 def get_target_leads(segment: str | None = None, limit: int | None = None, *, include_reviewed: bool = False) -> list[TelegramSignal]:

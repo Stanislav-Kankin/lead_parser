@@ -16,9 +16,11 @@ from telegram_signals.keywords import CHAT_BAD_HINTS, CHAT_DISCOVERY_KEYWORDS, C
 from telegram_signals.repository import (
     WORKING_LEAD_FITS,
     count_signals,
+    get_reject_reason_stats,
     get_search_profile,
     get_signal_comments_map,
     get_signals,
+    get_source_quality_stats,
     list_search_profiles,
     save_search_profile,
     set_signal_review_status,
@@ -485,6 +487,118 @@ def search_settings_dashboard():
     """
 
 
+@app.get("/telegram-signals/analytics", response_class=HTMLResponse)
+def telegram_signals_analytics():
+    reject_stats = get_reject_reason_stats()
+    source_stats = get_source_quality_stats(limit=60)
+
+    total_raw = count_signals()
+    total_working = count_signals(lead_fit_in=WORKING_LEAD_FITS)
+    total_ok = count_signals(review_status="ok")
+    total_not_ok = count_signals(review_status="not_ok")
+    total_unchecked = count_signals(review_status="unchecked")
+
+    reject_rows = "".join(
+        f"""
+        <tr>
+          <td><a href="/telegram-signals?review_status=not_ok&reject_reason={escape(str(row['reason']))}">{escape(REJECT_REASON_LABELS.get(row['reason'], row['reason']))}</a></td>
+          <td>{row['total']}</td>
+          <td>{row['avg_score']}</td>
+        </tr>
+        """
+        for row in reject_stats
+    )
+    source_rows = "".join(
+        f"""
+        <tr>
+          <td>
+            <div class="source-title">{escape(row['chat_title'])}</div>
+            {f"<a href='https://t.me/{escape(str(row['chat_username']).lstrip('@'))}' target='_blank'>@{escape(str(row['chat_username']).lstrip('@'))}</a>" if row['chat_username'] else ""}
+          </td>
+          <td>{row['total']}</td>
+          <td>{row['working']}</td>
+          <td>{row['ok']}</td>
+          <td>{row['not_ok']}</td>
+          <td>{row['unchecked']}</td>
+          <td>{row['reachable']}</td>
+          <td>{row['avg_score']}</td>
+          <td>{row['ok_rate']}%</td>
+          <td>{row['reject_rate']}%</td>
+        </tr>
+        """
+        for row in source_stats
+    )
+
+    return f"""
+    <!doctype html>
+    <html lang="ru">
+    <head>
+      <meta charset="utf-8" />
+      <meta name="viewport" content="width=device-width, initial-scale=1" />
+      <title>Аналитика Telegram Signals</title>
+      <style>
+        :root {{ --bg:#eef3f7; --panel:#fff; --text:#17202a; --muted:#667085; --line:#d9e2ec; --blue:#2563eb; --green:#0f9f6e; --red:#d92d20; }}
+        * {{ box-sizing: border-box; }}
+        body {{ margin:0; background:var(--bg); color:var(--text); font:14px/1.45 Inter,-apple-system,BlinkMacSystemFont,"Segoe UI",Arial,sans-serif; }}
+        .page {{ max-width:1180px; margin:0 auto; padding:22px 18px 44px; }}
+        .top {{ display:flex; justify-content:space-between; gap:16px; align-items:flex-start; margin-bottom:16px; }}
+        h1 {{ margin:0; font-size:26px; letter-spacing:0; }}
+        .subtitle {{ color:var(--muted); margin-top:5px; }}
+        .links {{ display:flex; gap:8px; flex-wrap:wrap; }}
+        a.button {{ min-height:34px; display:inline-flex; align-items:center; border:1px solid var(--line); border-radius:7px; background:#fff; color:#344054; padding:0 12px; text-decoration:none; }}
+        .stats {{ display:grid; grid-template-columns:repeat(5,minmax(0,1fr)); gap:10px; margin-bottom:14px; }}
+        .stat {{ background:var(--panel); border:1px solid var(--line); border-radius:8px; padding:12px; }}
+        .stat b {{ display:block; font-size:22px; }}
+        .stat span {{ color:var(--muted); font-size:12px; }}
+        .grid {{ display:grid; grid-template-columns:minmax(300px,.75fr) minmax(0,1.25fr); gap:14px; align-items:start; }}
+        section {{ background:var(--panel); border:1px solid var(--line); border-radius:8px; padding:14px; }}
+        h2 {{ margin:0 0 10px; font-size:18px; }}
+        table {{ width:100%; border-collapse:collapse; }}
+        th,td {{ padding:8px 9px; border-bottom:1px solid #eef2f7; text-align:left; vertical-align:top; }}
+        th {{ color:var(--muted); font-size:12px; font-weight:700; }}
+        td a {{ color:var(--blue); text-decoration:none; }}
+        .source-title {{ font-weight:700; }}
+        .empty {{ color:var(--muted); padding:14px 0; }}
+        @media (max-width:900px) {{ .top {{ display:block; }} .links {{ margin-top:10px; }} .stats,.grid {{ grid-template-columns:1fr; }} }}
+      </style>
+    </head>
+    <body>
+      <main class="page">
+        <div class="top">
+          <div>
+            <h1>Аналитика качества</h1>
+            <div class="subtitle">Смотрим, почему отбраковываем сигналы и какие источники реально дают лидов.</div>
+          </div>
+          <div class="links">
+            <a class="button" href="/telegram-signals">База лидов</a>
+            <a class="button" href="/telegram-signals/settings">Настройки</a>
+          </div>
+        </div>
+
+        <div class="stats">
+          <div class="stat"><b>{total_raw}</b><span>всего сигналов</span></div>
+          <div class="stat"><b>{total_working}</b><span>в рабочей базе</span></div>
+          <div class="stat"><b>{total_ok}</b><span>ОК</span></div>
+          <div class="stat"><b>{total_not_ok}</b><span>Не ОК</span></div>
+          <div class="stat"><b>{total_unchecked}</b><span>не разобрано</span></div>
+        </div>
+
+        <div class="grid">
+          <section>
+            <h2>Причины Не ОК</h2>
+            {f"<table><thead><tr><th>Причина</th><th>Кол-во</th><th>Avg score</th></tr></thead><tbody>{reject_rows}</tbody></table>" if reject_rows else "<div class='empty'>Пока нет размеченных причин.</div>"}
+          </section>
+          <section>
+            <h2>Качество источников</h2>
+            {f"<table><thead><tr><th>Источник</th><th>Всего</th><th>Раб.</th><th>ОК</th><th>Не ОК</th><th>?</th><th>Конт.</th><th>Score</th><th>OK%</th><th>Reject%</th></tr></thead><tbody>{source_rows}</tbody></table>" if source_rows else "<div class='empty'>Источников пока нет.</div>"}
+          </section>
+        </div>
+      </main>
+    </body>
+    </html>
+    """
+
+
 @app.get("/telegram-signals", response_class=HTMLResponse)
 def telegram_signals_dashboard(
     min_score: int = 0,
@@ -493,6 +607,7 @@ def telegram_signals_dashboard(
     status: str = "",
     crm_tag: str = "",
     review_status: str = "",
+    reject_reason: str = "",
     lead_category: str = "",
     view: str = "work",
     hot: bool = False,
@@ -521,6 +636,7 @@ def telegram_signals_dashboard(
         "status": status or None,
         "crm_tag": crm_tag or None,
         "review_status": review_status or None,
+        "reject_reason": reject_reason or None,
         "lead_category": lead_category or None,
     }
     total_items = count_signals(**filter_kwargs)
@@ -695,6 +811,10 @@ def telegram_signals_dashboard(
         f"<option value='{escape(value)}' {_selected(review_status, value)}>{escape(label)}</option>"
         for value, label in [("", "Все"), *REVIEW_LABELS.items()]
     )
+    reject_reason_filter_options = "".join(
+        f"<option value='{escape(value)}' {_selected(reject_reason, value)}>{escape(label)}</option>"
+        for value, label in [("", "Все"), *REJECT_REASON_LABELS.items()]
+    )
     category_options = "".join(
         f"<option value='{escape(value)}' {_selected(lead_category, value)}>{escape(label)}</option>"
         for value, label in [("", "Все"), *CATEGORY_LABELS.items()]
@@ -715,6 +835,7 @@ def telegram_signals_dashboard(
         "status": status,
         "crm_tag": crm_tag,
         "review_status": review_status,
+        "reject_reason": reject_reason,
         "lead_category": lead_category,
         "view": view if view in {"raw", "nurture", "hot", "hypothesis"} else "",
         "hot": "true" if hot else "",
@@ -1278,6 +1399,7 @@ def telegram_signals_dashboard(
             <div class="subtitle">Рабочая база лидов: фильтруем сигналы, помечаем контакт, ведем статус до ответа и встречи.</div>
             <div class="top-links">
               <a class="link-btn" href="/telegram-signals/settings">Настройки</a>
+              <a class="link-btn" href="/telegram-signals/analytics">Аналитика</a>
               <a class="link-btn" href="/telegram-signals/export?kind=all">Excel</a>
               <a class="link-btn" href="/telegram-signals?view=raw">Сырье</a>
             </div>
@@ -1308,6 +1430,7 @@ def telegram_signals_dashboard(
           <label>Статус <select name="status">{status_options}</select></label>
           <label>Тег <select name="crm_tag">{tag_options}</select></label>
           <label>Разбор <select name="review_status">{review_options}</select></label>
+          <label>Причина <select name="reject_reason">{reject_reason_filter_options}</select></label>
           <label>Боль <select name="lead_category">{category_options}</select></label>
           <label>Ниша <input name="niche" value="{escape(niche)}" placeholder="одежда, электроника..."></label>
           <label>На странице <select name="per_page">{per_page_options}</select></label>
