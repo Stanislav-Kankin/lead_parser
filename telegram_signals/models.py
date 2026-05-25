@@ -115,6 +115,7 @@ class SearchProfile(Base):
     name = Column(String, nullable=False)
     segment = Column(String, nullable=False, default="ecom_marketplace_pain")
     queries_text = Column(Text, nullable=False, default="")
+    source_chats_text = Column(Text, nullable=True)
     stop_words_text = Column(Text, nullable=True)
     good_chat_hints_text = Column(Text, nullable=True)
     bad_chat_hints_text = Column(Text, nullable=True)

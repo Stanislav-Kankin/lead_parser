@@ -21,6 +21,7 @@ class Lead(Base):
     icp_reason = Column(String, nullable=True)
     hypothesis = Column(String, nullable=True)
     opener = Column(String, nullable=True)
+    cjm_stage = Column(String, nullable=True)
     lead_type = Column(String, nullable=True)
     priority = Column(String, nullable=True)
     title = Column(String, nullable=True)

@@ -610,6 +610,7 @@ def save_search_profile(data: dict, profile_id: int | None = None) -> SearchProf
             "name",
             "segment",
             "queries_text",
+            "source_chats_text",
             "stop_words_text",
             "good_chat_hints_text",
             "bad_chat_hints_text",

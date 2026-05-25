@@ -26,6 +26,17 @@ def _chat_title(chat: Any) -> str:
     return getattr(chat, "title", None) or getattr(chat, "username", None) or str(getattr(chat, "id", "unknown"))
 
 
+def _normalize_chat_ref(value: str) -> str:
+    ref = (value or "").strip()
+    if not ref:
+        return ""
+    ref = ref.replace("https://t.me/", "").replace("http://t.me/", "").strip()
+    ref = ref.split("?", 1)[0].strip().strip("/")
+    if ref.startswith("joinchat/") or ref.startswith("+"):
+        return ref
+    return ref.lstrip("@")
+
+
 CHAT_TITLE_POSITIVE_HINTS = (
     "wb",
     "wildberries",
@@ -144,6 +155,23 @@ async def _collect_messages_from_chat(client, chat, limit_per_chat: int, max_age
     return messages
 
 
+async def _load_configured_chats(client, source_chats: list[str]) -> list[Any]:
+    chats = []
+    for raw_ref in source_chats:
+        ref = _normalize_chat_ref(raw_ref)
+        if not ref:
+            continue
+        try:
+            chat = await client.get_entity(ref)
+        except Exception as exc:
+            logger.warning("[telegram_signals] configured_chat_failed ref=%s error=%s", raw_ref, exc)
+            continue
+        title = getattr(chat, "title", None) or getattr(chat, "username", None)
+        if title:
+            chats.append(chat)
+    return chats
+
+
 def _signal_level(signal: dict) -> str:
     return str(signal.get("signal_level") or signal.get("level") or "low")
 
@@ -191,10 +219,18 @@ async def collect_signals(
     try:
         profile = profile or {}
         queries = profile.get("queries") or CHAT_DISCOVERY_KEYWORDS[segment]
+        source_chats = profile.get("source_chats") or []
         stop_words = [item.lower() for item in profile.get("stop_words", []) if item]
         good_hints = profile.get("good_chat_hints") or None
         bad_hints = profile.get("bad_chat_hints") or None
         min_score = int(profile.get("min_score") or 0)
+
+        for chat in await _load_configured_chats(client, source_chats):
+            chat_id = getattr(chat, "id", None)
+            if not chat_id or chat_id in seen_chat_ids:
+                continue
+            seen_chat_ids.add(chat_id)
+            discovered_chats.append(chat)
 
         for query in queries:
             chats = await search_public_chats(client, query, limit=limit_chats)

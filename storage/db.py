@@ -95,6 +95,7 @@ TELEGRAM_SIGNAL_REQUIRED_COLUMNS = {
 REQUIRED_COLUMNS = {
     "title": "ALTER TABLE leads ADD COLUMN title VARCHAR",
     "opener": "ALTER TABLE leads ADD COLUMN opener VARCHAR",
+    "cjm_stage": "ALTER TABLE leads ADD COLUMN cjm_stage VARCHAR",
     "lead_type": "ALTER TABLE leads ADD COLUMN lead_type VARCHAR",
     "priority": "ALTER TABLE leads ADD COLUMN priority VARCHAR",
     "company_inn": "ALTER TABLE leads ADD COLUMN company_inn VARCHAR",
@@ -116,6 +117,10 @@ REQUIRED_COLUMNS = {
     "last_enriched_at": "ALTER TABLE leads ADD COLUMN last_enriched_at DATETIME",
     "domain_normalized": "ALTER TABLE leads ADD COLUMN domain_normalized VARCHAR",
     "root_domain": "ALTER TABLE leads ADD COLUMN root_domain VARCHAR",
+}
+
+SEARCH_PROFILE_REQUIRED_COLUMNS = {
+    "source_chats_text": "ALTER TABLE search_profiles ADD COLUMN source_chats_text TEXT",
 }
 
 
@@ -173,11 +178,25 @@ def _ensure_telegram_signal_columns():
         conn.execute(text("UPDATE telegram_signals SET lead_score_100 = COALESCE(lead_score_100, final_lead_score, signal_score, 0)"))
 
 
+def _ensure_search_profile_columns():
+    inspector = inspect(engine)
+    if "search_profiles" not in inspector.get_table_names():
+        return
+
+    columns = {col["name"] for col in inspector.get_columns("search_profiles")}
+    with engine.begin() as conn:
+        for name, ddl in SEARCH_PROFILE_REQUIRED_COLUMNS.items():
+            if name not in columns:
+                conn.execute(text(ddl))
+
+
 def init_db():
     Base.metadata.create_all(bind=engine)
     _ensure_columns()
     _ensure_telegram_signal_columns()
+    _ensure_search_profile_columns()
     _ensure_default_search_profiles()
+    _normalize_search_profiles()
 
 
 def _ensure_default_search_profiles():
@@ -191,6 +210,7 @@ def _ensure_default_search_profiles():
                     name=SEGMENT_LABELS.get(segment, segment),
                     segment=segment,
                     queries_text="\n".join(queries),
+                    source_chats_text="",
                     stop_words_text="",
                     good_chat_hints_text="\n".join(CHAT_GOOD_HINTS),
                     bad_chat_hints_text="\n".join(CHAT_BAD_HINTS),
@@ -202,3 +222,20 @@ def _ensure_default_search_profiles():
                 )
             )
         session.commit()
+
+
+def _normalize_search_profiles():
+    with SessionLocal() as session:
+        changed = False
+        for profile in session.query(SearchProfile).all():
+            bad_lines = [
+                line.strip()
+                for line in (profile.bad_chat_hints_text or "").splitlines()
+                if line.strip() and line.strip().lower() != "direct"
+            ]
+            normalized_bad = "\n".join(dict.fromkeys(bad_lines))
+            if (profile.bad_chat_hints_text or "") != normalized_bad:
+                profile.bad_chat_hints_text = normalized_bad
+                changed = True
+        if changed:
+            session.commit()

@@ -46,6 +46,7 @@ def save_leads(leads: Iterable[dict]) -> dict:
                 "icp_reason": item.get("icp_reason"),
                 "hypothesis": item.get("hypothesis"),
                 "opener": item.get("opener"),
+                "cjm_stage": item.get("cjm_stage"),
                 "lead_type": item.get("lead_type"),
                 "priority": item.get("priority"),
                 "title": item.get("title"),

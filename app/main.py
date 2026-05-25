@@ -81,10 +81,10 @@ REJECT_REASON_LABELS = {
 }
 
 CJM_STAGE_LABELS = {
-    "hot_outreach": "Ищет сейчас",
-    "consideration": "Изучает варианты",
-    "awareness": "Осознает проблему",
-    "signal_only": "Сигнал",
+    "hot_outreach": "🔥 Ищет сейчас",
+    "consideration": "🤔 Изучает варианты",
+    "awareness": "💡 Осознает проблему",
+    "signal_only": "📡 Сигнал",
 }
 
 CATEGORY_LABELS = {
@@ -203,6 +203,7 @@ def _lines(value: str | None) -> list[str]:
 def _profile_config(profile) -> dict:
     return {
         "queries": _lines(profile.queries_text),
+        "source_chats": _lines(getattr(profile, "source_chats_text", "")),
         "stop_words": _lines(profile.stop_words_text),
         "good_chat_hints": _lines(profile.good_chat_hints_text),
         "bad_chat_hints": _lines(profile.bad_chat_hints_text),
@@ -372,6 +373,7 @@ async def save_settings_profile(request: Request):
             "name": _profile_form_value(form, "name", "Новый профиль"),
             "segment": _profile_form_value(form, "segment", "ecom_marketplace_pain"),
             "queries_text": str(form.get("queries_text") or "").strip(),
+            "source_chats_text": str(form.get("source_chats_text") or "").strip(),
             "stop_words_text": str(form.get("stop_words_text") or "").strip(),
             "good_chat_hints_text": str(form.get("good_chat_hints_text") or "").strip(),
             "bad_chat_hints_text": str(form.get("bad_chat_hints_text") or "").strip(),
@@ -396,6 +398,7 @@ def search_settings_dashboard():
         current_segment = "ecom_marketplace_pain" if is_new else profile.segment
         name = "Маркетплейсы: явная боль" if is_new else profile.name or ""
         queries = "\n".join(CHAT_DISCOVERY_KEYWORDS.get(current_segment, [])) if is_new else profile.queries_text or ""
+        source_chats = "" if is_new else getattr(profile, "source_chats_text", None) or ""
         stop_words = "" if is_new else profile.stop_words_text or ""
         good_hints = "\n".join(CHAT_GOOD_HINTS) if is_new else profile.good_chat_hints_text or ""
         bad_hints = "\n".join(CHAT_BAD_HINTS) if is_new else profile.bad_chat_hints_text or ""
@@ -439,6 +442,7 @@ def search_settings_dashboard():
 
             <div class="textarea-grid">
               <label>Где искать каналы <textarea name="queries_text" spellcheck="false">{escape(queries)}</textarea></label>
+              <label>Конкретные чаты / каналы <textarea name="source_chats_text" spellcheck="false" placeholder="@chatname&#10;https://t.me/chatname&#10;chatname">{escape(source_chats)}</textarea></label>
               <label>Минус-слова сообщений <textarea name="stop_words_text" spellcheck="false" placeholder="новость&#10;вебинар&#10;вакансия&#10;мне кажется&#10;кейсы по выбору ниши">{escape(stop_words)}</textarea></label>
               <label>Плюс-слова в названии чата <textarea name="good_chat_hints_text" spellcheck="false">{escape(good_hints)}</textarea></label>
               <label>Минус-слова в названии чата <textarea name="bad_chat_hints_text" spellcheck="false">{escape(bad_hints)}</textarea></label>
@@ -521,7 +525,7 @@ def search_settings_dashboard():
 @app.get("/telegram-signals/analytics", response_class=HTMLResponse)
 def telegram_signals_analytics():
     reject_stats = get_reject_reason_stats()
-    source_stats = get_source_quality_stats(limit=60)
+    source_stats = get_source_quality_stats(limit=10)
 
     total_raw = count_signals()
     total_working = count_signals(lead_fit_in=WORKING_LEAD_FITS)
