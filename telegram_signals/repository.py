@@ -178,9 +178,26 @@ def reclassify_existing_signals(limit: int | None = None) -> dict:
             for field in RECLASSIFY_FIELDS:
                 if field in signal:
                     setattr(item, field, signal[field])
+            if signal.get("lead_fit") in {"not_icp", "noise", "market_insight", "contractor"}:
+                if item.review_status == "unchecked":
+                    item.reject_reason = item.reject_reason or _auto_reject_reason(signal)
             updated += 1
         session.commit()
     return {"updated": updated}
+
+
+def _auto_reject_reason(signal: dict) -> str:
+    message_type = str(signal.get("message_type") or "")
+    lead_category = str(signal.get("lead_category") or "")
+    if message_type == "vacancy":
+        return "not_icp"
+    if message_type in {"service_ad", "supplier_ad"}:
+        return "supplier_or_ad"
+    if lead_category in {"taxes", "certification", "returns_logistics"}:
+        return "operations_only"
+    if message_type in {"market_intelligence", "expert_content"}:
+        return "soft_opinion"
+    return "not_icp"
 
 
 def get_signals(

@@ -490,6 +490,28 @@ PRODUCT_RESEARCH_PATTERNS = [
     "не выкатить никому ненужную штуку",
 ]
 
+JOB_SEARCH_PATTERNS = [
+    "ищем специалиста",
+    "ищу специалиста",
+    "нужен специалист",
+    "нужна специалист",
+    "ищем сотрудника",
+    "ищу сотрудника",
+    "нужен сотрудник",
+    "заполнять карточки",
+    "заполнение карточек",
+    "заполнить карточки",
+    "ведение сообществ",
+    "ведение сообщества",
+    "ведение блогов",
+    "вести блог",
+    "smm",
+    "воронка продаж",
+    "условия обсудим",
+    "резюме",
+    "вакансия",
+]
+
 CHANNEL_AUTHOR_PATTERNS = [
     "подписывайтесь",
     "в канале",
@@ -1579,6 +1601,7 @@ def classify_signal(
     market_hits = [p for p in MARKET_OBSERVATION_PATTERNS if p in text_l]
     supplier_hits = [p for p in SUPPLIER_AD_PATTERNS if p in text_l]
     product_research_hits = [p for p in PRODUCT_RESEARCH_PATTERNS if p in text_l]
+    job_search_hits = [p for p in JOB_SEARCH_PATTERNS if p in text_l]
     channel_hits = [p for p in CHANNEL_AUTHOR_PATTERNS if p in text_l]
     official_hits = [p for p in OFFICIAL_MARKETPLACE_PATTERNS if p in text_l or p in chat_haystack]
     change_event_hits = [p for p in CHANGE_EVENT_PATTERNS if p in text_l]
@@ -1673,6 +1696,8 @@ def classify_signal(
         promo_penalty += 25
     if product_research_hits:
         promo_penalty += 35
+    if job_search_hits:
+        promo_penalty += 35
     if operational_not_growth_hits and not cjm_ceiling_hits and not cjm_economics_hits and not cjm_partner_friction_hits:
         promo_penalty += 18
     promo_penalty += len(expert_hits) * 2
@@ -1701,6 +1726,8 @@ def classify_signal(
 
     if product_research_hits:
         message_type = "service_ad"
+    elif job_search_hits:
+        message_type = "vacancy"
     elif hard_noise_hits:
         message_type = "supplier_ad"
     elif operational_not_growth_hits and not has_cjm_warm_signal and not has_direct_request:
@@ -1749,6 +1776,7 @@ def classify_signal(
         + explicit_pain_hits
         + explicit_request_hits
         + product_research_hits
+        + job_search_hits
         + cjm_ceiling_hits
         + cjm_economics_hits
         + cjm_safe_step_hits
@@ -1892,7 +1920,11 @@ def classify_signal(
         lead_fit = "warm_hypothesis"
         next_step = "outreach_hypothesis"
         lead_score_100 = min(lead_score_100, 79)
-    if product_research_hits:
+    if job_search_hits:
+        lead_fit = "not_icp"
+        next_step = "ignore"
+        lead_score_100 = 0
+    elif product_research_hits:
         lead_fit = "not_icp"
         next_step = "ignore"
         lead_score_100 = min(lead_score_100, 10)
