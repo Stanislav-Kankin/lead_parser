@@ -8,7 +8,7 @@ from threading import Lock
 from urllib.parse import parse_qs, urlencode
 
 from fastapi import BackgroundTasks, FastAPI, Request
-from fastapi.responses import FileResponse, HTMLResponse, RedirectResponse
+from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, RedirectResponse
 
 from storage.db import init_db
 from telegram_signals.exporter import export_signals_to_xlsx
@@ -79,6 +79,19 @@ CATEGORY_LABELS = {
     "taxes": "Налоги / отчеты",
     "certification": "Сертификация",
     "not_target": "Нецелевой",
+}
+
+LEAD_FIT_LABELS = {
+    "hot_outreach": "Горячий",
+    "warm_hypothesis": "Гипотеза",
+    "warm_reply": "Теплый",
+    "target": "Целевой",
+    "review": "Проверить",
+    "nurture": "Наблюдать",
+    "market_insight": "Контекст",
+    "not_icp": "Не ICP",
+    "noise": "Шум",
+    "contractor": "Подрядчик",
 }
 
 
@@ -241,6 +254,13 @@ async def collect_from_dashboard(request: Request, background_tasks: BackgroundT
     return RedirectResponse("/telegram-signals?review_status=unchecked", status_code=303)
 
 
+@app.get("/telegram-signals/job-status")
+def telegram_signals_job_status():
+    with JOB_LOCK:
+        job = dict(DASHBOARD_JOB)
+    return JSONResponse(job)
+
+
 @app.post("/telegram-signals/{signal_id}/status")
 def update_signal_status(signal_id: int, request: Request, status: str | None = None, review_status: str | None = None):
     if status:
@@ -323,7 +343,7 @@ def search_settings_dashboard():
         max_age_hours = 96 if is_new else profile.max_age_hours
         limit_chats = 10 if is_new else profile.limit_chats
         limit_messages = 80 if is_new else profile.limit_messages_per_chat
-        min_score = 60 if is_new else profile.min_score
+        min_score = 35 if is_new else profile.min_score
         is_active = True if is_new else bool(profile.is_active)
         title = "Новый профиль" if is_new else escape(name)
         submit_label = "Создать профиль" if is_new else "Сохранить"
@@ -354,8 +374,8 @@ def search_settings_dashboard():
             </div>
 
             <div class="signal-rule">
-              <b>Рабочий лид:</b> селлер или бренд WB/Ozon + личная боль/запрос + понятный мост к сайту, Direct, Киту или экономике.
-              <span>Общие рассуждения, новости, кейсы и советы без запроса уходят в сырье или отсекаются.</span>
+              <b>Рабочий сигнал:</b> ICP + потолок текущей модели / ухудшение экономики / безопасный следующий шаг.
+              <span>Прямые запросы идут в горячие, зрелые симптомы без запроса — в гипотезы для аккуратного outreach.</span>
             </div>
 
             <div class="textarea-grid">
@@ -428,7 +448,7 @@ def search_settings_dashboard():
         </div>
         <section class="preset-row">
           <div class="preset"><b>1. Каналы</b><span>Запросы ищут чаты селлеров, брендов и интернет-магазинов, а не общие маркетинговые форумы.</span></div>
-          <div class="preset"><b>2. Сигнал</b><span>В рабочую базу попадает только личная боль: не сходится экономика, нет продаж, ищут подрядчика или direct.</span></div>
+          <div class="preset"><b>2. Сигнал</b><span>В рабочую базу попадает не только запрос, но и CJM-симптом: потолок MP, рост ДРР/CAC, страх слить бюджет, поиск безопасного теста.</span></div>
           <div class="preset"><b>3. Отсев</b><span>Новости, рассуждения, кейсы, вакансии, обучение и поставщики режутся минус-словами и скорингом.</span></div>
         </section>
         {"".join(profile_cards)}
@@ -457,7 +477,16 @@ def telegram_signals_dashboard(
     per_page = per_page if per_page in {10, 50, 200} else 50
     page = max(1, page)
     is_raw_view = view == "raw"
-    lead_fit_filter = None if is_raw_view else ["nurture"] if view == "nurture" else WORKING_LEAD_FITS
+    if is_raw_view:
+        lead_fit_filter = None
+    elif view == "nurture":
+        lead_fit_filter = ["nurture"]
+    elif view == "hot":
+        lead_fit_filter = ["hot_outreach", "target"]
+    elif view == "hypothesis":
+        lead_fit_filter = ["warm_hypothesis", "warm_reply", "review"]
+    else:
+        lead_fit_filter = WORKING_LEAD_FITS
     filter_kwargs = {
         "lead_fit_in": lead_fit_filter,
         "min_score": score or None,
@@ -492,6 +521,7 @@ def telegram_signals_dashboard(
         text = escape(_short(item.text_excerpt or item.message_text, 520))
         opener = escape(_short(item.best_reply_draft or item.opener_expert or item.opener_soft or item.recommended_opener, 520))
         category = CATEGORY_LABELS.get(item.lead_category or "", item.lead_category or "Не определено")
+        lead_fit_label = LEAD_FIT_LABELS.get(item.lead_fit or "", item.lead_fit or "-")
         status_label = STATUS_LABELS.get(item.status or "new", item.status or "Новый")
         review_label = REVIEW_LABELS.get(item.review_status or "unchecked", item.review_status or "Не разобран")
         selected_tags = set(_split_tags(item.crm_tag))
@@ -551,7 +581,7 @@ def telegram_signals_dashboard(
                 <span>{escape(item.niche or "ниша не указана")}</span>
                 <span>{escape(item.likely_icp or "ICP unknown")}</span>
                 <span>{escape(category)}</span>
-                <span>{escape(item.lead_fit or "-")}</span>
+                <span>{escape(lead_fit_label)}</span>
                 <span>{escape(item.bridge_to_offer or "no_bridge")}</span>
               </div>
 
@@ -622,7 +652,7 @@ def telegram_signals_dashboard(
         f"<option value='{escape(value)}' {_selected(crm_tag, value)}>{escape(label)}</option>"
         for value, label in [("", "Все"), *CRM_TAG_LABELS.items()]
     )
-    view_hidden = f"<input type='hidden' name='view' value='{escape(view)}'>" if view in {"raw", "nurture"} else ""
+    view_hidden = f"<input type='hidden' name='view' value='{escape(view)}'>" if view in {"raw", "nurture", "hot", "hypothesis"} else ""
     per_page_options = "".join(
         f"<option value='{value}' {_selected(str(per_page), str(value))}>{value}</option>"
         for value in [10, 50, 200]
@@ -635,7 +665,7 @@ def telegram_signals_dashboard(
         "crm_tag": crm_tag,
         "review_status": review_status,
         "lead_category": lead_category,
-        "view": "raw" if is_raw_view else "",
+        "view": view if view in {"raw", "nurture", "hot", "hypothesis"} else "",
         "hot": "true" if hot else "",
         "per_page": per_page,
     }
@@ -666,16 +696,15 @@ def telegram_signals_dashboard(
         job_class = "job-idle"
 
     quick_links = [
+        ("Рабочие", "/telegram-signals", count_signals(lead_fit_in=WORKING_LEAD_FITS)),
+        ("Горячие", "/telegram-signals?view=hot", count_signals(lead_fit_in=["hot_outreach", "target"])),
+        ("Гипотезы", "/telegram-signals?view=hypothesis", count_signals(lead_fit_in=["warm_hypothesis", "warm_reply", "review"])),
         ("На проверку", "/telegram-signals?review_status=unchecked", _count_signals(review_status="unchecked")),
         ("Наблюдать", "/telegram-signals?view=nurture", count_signals(lead_fit_in=["nurture"])),
         ("ОК написать", "/telegram-signals?review_status=ok&status=new", _count_signals(review_status="ok", status="new")),
-        ("Прочитал", "/telegram-signals?status=reviewed", _count_signals(status="reviewed")),
         ("Написал", "/telegram-signals?status=contacted", _count_signals(status="contacted")),
         ("Ответили", "/telegram-signals?status=replied", _count_signals(status="replied")),
-        ("Теплые", "/telegram-signals?status=warm", _count_signals(status="warm")),
         ("Встречи", "/telegram-signals?status=meeting_booked", _count_signals(status="meeting_booked")),
-        ("Архив", "/telegram-signals?status=dead", _count_signals(status="dead")),
-        ("Горячие", "/telegram-signals?hot=true", _count_signals(min_score=80)),
         ("Сырье", "/telegram-signals?view=raw", count_signals()),
     ]
     quick_nav = "".join(
@@ -1100,9 +1129,52 @@ def telegram_signals_dashboard(
           .crm-form {{ grid-template-columns: 1fr; }}
           .card-footer {{ align-items: flex-start; flex-direction: column; }}
         }}
+        .shell {{ display: block; min-height: 100vh; }}
+        .sidebar {{ display: none; }}
+        .page {{ max-width: 1180px; padding: 18px 18px 40px; }}
+        .hero {{ align-items: center; margin-bottom: 12px; }}
+        h1 {{ font-size: 24px; }}
+        .subtitle {{ margin-top: 4px; font-size: 13px; }}
+        .top-links {{ display: flex; flex-wrap: wrap; gap: 8px; margin-top: 10px; }}
+        .stats {{ min-width: 0; grid-template-columns: repeat(4, minmax(88px, 1fr)); gap: 8px; }}
+        .stat {{ padding: 9px 10px; }}
+        .stat b {{ font-size: 18px; }}
+        .toolbar {{ padding: 10px; margin-bottom: 10px; align-items: center; }}
+        .collect-form {{ display: flex; gap: 8px; align-items: center; }}
+        .collect-form select {{ width: 220px; margin-right: 0; }}
+        .collect-btn {{ height: 36px; }}
+        .quick-nav {{ gap: 6px; margin-bottom: 10px; }}
+        .quick-link {{ min-height: 30px; padding: 0 9px; font-size: 13px; }}
+        .exports {{ margin-bottom: 10px; }}
+        .export-link {{ min-height: 30px; padding: 0 9px; font-size: 13px; }}
+        .filters {{ position: static; grid-template-columns: 80px 110px 120px 120px 120px minmax(150px, 1fr) 110px auto; gap: 8px; padding: 10px 0; margin-bottom: 10px; background: transparent; border-bottom: 1px solid var(--line); backdrop-filter: none; }}
+        .filters label:nth-of-type(4), .filters label:nth-of-type(9) {{ display: none; }}
+        input, select {{ height: 34px; }}
+        .filter-btn {{ height: 34px; min-height: 34px; }}
+        .pagination {{ margin-bottom: 10px; font-size: 13px; }}
+        .lead-list {{ gap: 10px; }}
+        .lead-card {{ padding: 12px; box-shadow: none; }}
+        h2 {{ font-size: 18px; }}
+        .score {{ width: 46px; height: 36px; font-size: 17px; }}
+        .badges {{ margin: 8px 0; gap: 5px; }}
+        .badges span {{ padding: 3px 7px; }}
+        .columns {{ grid-template-columns: minmax(0, 1.15fr) minmax(280px, .85fr); gap: 12px; }}
+        .card-footer {{ margin-top: 10px; padding-top: 10px; }}
+        .actions, .links {{ gap: 6px; }}
+        .btn, .link-btn {{ min-height: 30px; padding: 5px 8px; font-size: 13px; }}
+        .crm-form {{ grid-template-columns: 140px 160px minmax(220px, 1fr) auto; gap: 8px; margin-top: 10px; padding-top: 10px; }}
+        textarea {{ min-height: 34px; }}
+        @media (max-width: 900px) {{
+          .hero, .toolbar {{ display: block; }}
+          .stats {{ grid-template-columns: repeat(2, minmax(0, 1fr)); margin-top: 10px; }}
+          .collect-form {{ display: grid; grid-template-columns: 1fr; }}
+          .collect-form select {{ width: 100%; }}
+          .filters, .columns, .crm-form {{ grid-template-columns: 1fr; }}
+          .filters label:nth-of-type(4), .filters label:nth-of-type(9) {{ display: grid; }}
+        }}
       </style>
     </head>
-    <body>
+    <body data-job-running="{'1' if job['running'] else '0'}" data-job-finished="{escape(str(job.get('last_finished_at') or ''), quote=True)}">
       <div class="shell">
       <aside class="sidebar">
         <div class="brand">Telegram Signals</div>
@@ -1116,6 +1188,11 @@ def telegram_signals_dashboard(
           <div>
             <h1>База лидов</h1>
             <div class="subtitle">Рабочая база лидов: фильтруем сигналы, помечаем контакт, ведем статус до ответа и встречи.</div>
+            <div class="top-links">
+              <a class="link-btn" href="/telegram-signals/settings">Настройки</a>
+              <a class="link-btn" href="/telegram-signals/export?kind=all">Excel</a>
+              <a class="link-btn" href="/telegram-signals?view=raw">Сырье</a>
+            </div>
           </div>
           <div class="stats">
             <div class="stat"><b>{total_items}</b><span>найдено по фильтру</span></div>
@@ -1176,6 +1253,28 @@ def telegram_signals_dashboard(
             }}
           }});
         }});
+        (() => {{
+          let seenRunning = document.body.dataset.jobRunning === '1';
+          const statusEl = document.querySelector('.job-status');
+          async function pollJob() {{
+            try {{
+              const response = await fetch('/telegram-signals/job-status', {{ cache: 'no-store' }});
+              const job = await response.json();
+              if (job.running) {{
+                seenRunning = true;
+                if (statusEl) {{
+                  statusEl.textContent = 'Идет сбор сигналов. Страница обновится сама после завершения.';
+                  statusEl.className = 'job-status job-running';
+                }}
+                return;
+              }}
+              if (seenRunning) {{
+                window.location.reload();
+              }}
+            }} catch (e) {{}}
+          }}
+          setInterval(pollJob, 4000);
+        }})();
       </script>
     </body>
     </html>

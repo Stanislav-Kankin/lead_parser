@@ -218,6 +218,101 @@ SELLER_CONTEXT_PATTERNS = [
     "яндекс.кит",
 ]
 
+CJM_GROWTH_CEILING_PATTERNS = [
+    "потолок",
+    "потолок модели",
+    "уперлись",
+    "упёрлись",
+    "не масштабируется",
+    "перестало масштабироваться",
+    "дальше так нельзя",
+    "дальше так расти нельзя",
+    "крутимся на месте",
+    "все оптимизировали",
+    "всё оптимизировали",
+    "уже все перепробовали",
+    "уже всё перепробовали",
+    "каждый следующий рубль",
+    "меньший эффект",
+    "результат менее предсказуем",
+    "результат становится менее предсказуемым",
+    "не в настройках",
+    "не в настройке",
+    "предел текущей модели",
+    "предел модели",
+    "модель роста",
+]
+
+CJM_ECONOMICS_PRESSURE_PATTERNS = [
+    "cac растет",
+    "cac вырос",
+    "стоимость привлечения растет",
+    "стоимость привлечения выросла",
+    "дрр растет",
+    "дрр вырос",
+    "доля рекламных расходов растет",
+    "romi падает",
+    "romi просел",
+    "рост бюджета",
+    "бюджет растет",
+    "ставки растут",
+    "ставки выросли",
+    "аукцион перегрет",
+    "дорогой клик",
+    "клик дорожает",
+    "комиссии растут",
+    "комиссии съедают",
+    "комиссия съедает",
+    "маржа падает",
+    "маржа под давлением",
+    "экономика под давлением",
+    "экономика не сходится",
+]
+
+CJM_SAFE_NEXT_STEP_PATTERNS = [
+    "без резких",
+    "не сломать",
+    "не ломая",
+    "не разрушить",
+    "не навредить",
+    "не слить бюджет",
+    "безопасный шаг",
+    "контролируемый эксперимент",
+    "контролируемый тест",
+    "проверить гипотезу",
+    "проверка гипотезы",
+    "стоп-критерии",
+    "критерии остановки",
+    "пилот",
+    "параллельный канал",
+    "следующий шаг",
+    "внешний трафик",
+    "direct",
+    "d2c",
+    "свой сайт",
+    "собственный канал",
+    "прямой канал",
+]
+
+CJM_PARTNER_FRICTION_PATTERNS = [
+    "сменили подрядчиков",
+    "меняли подрядчиков",
+    "подрядчик не объясняет",
+    "агентство не объясняет",
+    "все говорят одно и то же",
+    "все красиво говорят",
+    "слили бюджет",
+    "слив бюджета",
+    "нет прозрачности",
+    "нет ясности",
+    "аудиты были",
+    "после аудита",
+    "не понимают экономику",
+    "думают кликами",
+    "нужен партнер",
+    "нужен партнёр",
+]
+
 SUPPLIER_AD_PATTERNS = [
     "отгрузка оптом",
     "со склада",
@@ -766,6 +861,11 @@ def build_recommended_opener(text_l: str, message_type: str, lead_fit: str) -> s
             "Сначала проверить компанию, сайт и роль автора. Если это бренд, производитель или seller, "
             "идти через гипотезу прямого канала: свой сайт или Яндекс.Кит + Директ как допканал параллельно WB/Ozon."
         )
+    if lead_fit == "warm_hypothesis":
+        return (
+            "Заходить не с продажей, а с гипотезой CJM: похоже, текущая модель роста упирается в потолок, "
+            "и следующий шаг стоит проверять как аккуратный пилот без ломки WB/Ozon или работающего перфоманса."
+        )
     if message_type == "market_intelligence":
         return "Это лучше использовать как рыночный инсайт и источник гипотез, а не как прямой outreach."
     return "Нужен ручной разбор цепочки сообщений."
@@ -1282,6 +1382,10 @@ def classify_signal(
     explicit_pain_hits = [p for p in EXPLICIT_SELLER_PAIN_PATTERNS if p in text_l]
     explicit_request_hits = [p for p in EXPLICIT_HELP_REQUEST_PATTERNS if p in text_l]
     seller_context_hits = [p for p in SELLER_CONTEXT_PATTERNS if p in full_l]
+    cjm_ceiling_hits = [p for p in CJM_GROWTH_CEILING_PATTERNS if p in text_l]
+    cjm_economics_hits = [p for p in CJM_ECONOMICS_PRESSURE_PATTERNS if p in text_l]
+    cjm_safe_step_hits = [p for p in CJM_SAFE_NEXT_STEP_PATTERNS if p in text_l]
+    cjm_partner_friction_hits = [p for p in CJM_PARTNER_FRICTION_PATTERNS if p in text_l]
 
     first_person_pain_score = len(first_person_hits) * 3
     live_help_score = len(live_help_hits) * 3
@@ -1299,8 +1403,18 @@ def classify_signal(
             if reply_keyword_hits:
                 participant_score += 5
 
-    pain_score = len(pain_hits) * 3 + len(marketing_pain_hits) * 2 + len(explicit_pain_hits) * 4 + first_person_pain_score + live_help_score + operational_score
-    intent_score = len(intent_hits) * 4 + len(change_event_hits) * 2 + len(explicit_request_hits) * 4 + len(live_help_hits) * 2
+    pain_score = (
+        len(pain_hits) * 3
+        + len(marketing_pain_hits) * 2
+        + len(explicit_pain_hits) * 4
+        + len(cjm_ceiling_hits) * 4
+        + len(cjm_economics_hits) * 3
+        + len(cjm_partner_friction_hits) * 3
+        + first_person_pain_score
+        + live_help_score
+        + operational_score
+    )
+    intent_score = len(intent_hits) * 4 + len(change_event_hits) * 2 + len(explicit_request_hits) * 4 + len(cjm_safe_step_hits) * 2 + len(live_help_hits) * 2
     icp_score = len(direct_hits) * 2 + len(brand_hits) * 2 + len(owner_role_hits) * 2 + len(business_scope_hits)
 
     if any(x in full_l for x in ["wb", "ozon", "маркетплейс", "селлер", "seller", "sku", "карточк", "интернет-магазин", "сайт"]):
@@ -1343,6 +1457,15 @@ def classify_signal(
     strong_first_person_hits = [p for p in first_person_hits if p not in {"мне", "мой", "мои", "наш", "наши"}]
     has_seller_context = bool(seller_context_hits or direct_hits or brand_hits or business_scope_hits)
     has_personal_commercial_context = bool(strong_first_person_hits and (pain_hits or marketing_pain_hits or operational_hits or change_event_hits or direct_hits or brand_hits))
+    has_cjm_warm_signal = bool(
+        has_seller_context
+        and (
+            cjm_ceiling_hits
+            or cjm_partner_friction_hits
+            or (cjm_economics_hits and (first_person_hits or owner_role_hits or brand_hits or business_scope_hits))
+            or (cjm_safe_step_hits and (intent_hits or live_help_hits or "?" in text_l))
+        )
+    )
     has_live_problem = bool(explicit_pain_hits or explicit_request_hits or live_help_hits or has_personal_commercial_context)
     has_strong_commercial_signal = bool(has_live_problem and has_seller_context)
     is_editorial = editorial_penalty >= 4 or bool(editorial_hits or channel_hits or official_hits)
@@ -1379,7 +1502,23 @@ def classify_signal(
 
     conversation_type = _guess_conversation_type(full_l, bool(intent_hits or live_help_hits), bool(pain_hits or marketing_pain_hits or operational_hits), author_type_guess)
 
-    matched = pain_hits + intent_hits + direct_hits + brand_hits + first_person_hits + change_event_hits + marketing_pain_hits + explicit_pain_hits + explicit_request_hits + live_help_hits + operational_hits
+    matched = (
+        pain_hits
+        + intent_hits
+        + direct_hits
+        + brand_hits
+        + first_person_hits
+        + change_event_hits
+        + marketing_pain_hits
+        + explicit_pain_hits
+        + explicit_request_hits
+        + cjm_ceiling_hits
+        + cjm_economics_hits
+        + cjm_safe_step_hits
+        + cjm_partner_friction_hits
+        + live_help_hits
+        + operational_hits
+    )
     seen: list[str] = []
     matched_keywords: list[str] = []
     for keyword in matched:
@@ -1387,7 +1526,7 @@ def classify_signal(
             seen.append(keyword)
             matched_keywords.append(keyword)
 
-    pain_detected = sorted({kw for kw in pain_hits + first_person_hits + marketing_pain_hits + explicit_pain_hits + live_help_hits + operational_hits})
+    pain_detected = sorted({kw for kw in pain_hits + first_person_hits + marketing_pain_hits + explicit_pain_hits + cjm_ceiling_hits + cjm_economics_hits + cjm_partner_friction_hits + live_help_hits + operational_hits})
     icp_detected = sorted({kw for kw in direct_hits + brand_hits + business_scope_hits + owner_role_hits})
 
     contact_entity_type, contact_entity_score, is_person_reachable = _classify_contact_entity(
@@ -1490,7 +1629,7 @@ def classify_signal(
         urgency=urgency,
         budget_hint=budget_hint,
     )
-    if not has_strong_commercial_signal and lead_score_100 > 35:
+    if not has_strong_commercial_signal and not has_cjm_warm_signal and lead_score_100 > 35:
         lead_score_100 = 35
     lead_fit, next_step = _fit_from_score(
         lead_score_100,
@@ -1502,6 +1641,16 @@ def classify_signal(
         contact_entity_type=contact_entity_type,
         has_live_problem=has_live_problem,
     )
+    if (
+        has_cjm_warm_signal
+        and lead_fit in {"not_icp", "nurture", "review"}
+        and message_type not in {"expert_content", "service_ad", "supplier_ad", "vacancy"}
+        and contact_entity_type not in {"bot"}
+        and editorial_penalty < 6
+    ):
+        lead_fit = "warm_hypothesis"
+        next_step = "outreach_hypothesis"
+        lead_score_100 = max(lead_score_100, 55)
     is_actionable = lead_fit == "hot_outreach"
     outreach = classify_outreach_segment(full_l, lead_fit, message_type)
     openers = _build_openers(
