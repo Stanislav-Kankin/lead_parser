@@ -1,39 +1,82 @@
-BASE_TEMPLATES = [
-    "{q}",
-    "{q} производитель",
-    "{q} производство",
-    "{q} оптом",
-    "{q} оптовый поставщик",
-    "{q} b2b",
-    "поставщик {q}",
-    "дистрибьютор {q}",
-    "завод {q}",
-    "бренд {q}",
-]
-
-NEGATIVE_SUFFIXES = [
-    "-маркетплейс -wildberries -ozon -avito -youtube -vk",
-    "-интернет-магазин -розница -отзывы -обзор",
-]
+from __future__ import annotations
 
 
-def build_queries(base_query: str) -> list[str]:
-    q = (base_query or "").strip()
-    if not q:
-        return []
+ICP1_PRESETS = {
+    "fmcg": [
+        "российский производитель продуктов питания официальный сайт",
+        "производитель напитков официальный сайт интернет-магазин",
+        "бренд продуктов питания собственное производство",
+        "производитель снеков официальный сайт",
+    ],
+    "beauty": [
+        "российский бренд косметики официальный интернет-магазин",
+        "производитель косметики собственное производство",
+        "бренд уходовой косметики официальный сайт",
+        "производитель бытовой химии официальный сайт",
+    ],
+    "household": [
+        "производитель товаров для дома официальный сайт",
+        "российский бренд товаров для дома интернет-магазин",
+        "производитель посуды официальный сайт",
+        "производитель текстиля для дома официальный сайт",
+    ],
+    "kids": [
+        "производитель детских товаров официальный сайт",
+        "российский бренд детских товаров интернет-магазин",
+        "производитель игрушек официальный сайт",
+    ],
+    "fashion": [
+        "российский бренд одежды официальный интернет-магазин",
+        "производитель одежды собственное производство",
+        "бренд обуви официальный сайт",
+    ],
+    "marketplace_brand": [
+        "бренд wildberries официальный сайт производитель",
+        "бренд ozon официальный сайт производитель",
+        "производитель на wildberries официальный сайт",
+        "производитель на ozon официальный сайт",
+    ],
+    "exhibitors": [
+        "участники продэкспо производитель официальный сайт",
+        "участники intercharm российский бренд официальный сайт",
+        "участники worldfood производитель официальный сайт",
+        "участники household expo производитель официальный сайт",
+    ],
+}
+
+NEGATIVE_SUFFIX = "-маркетплейс -wildberries -ozon -avito -отзывы -обзор -вакансии -pdf"
+
+
+def preset_queries(preset: str = "all") -> list[str]:
+    if preset == "all":
+        result: list[str] = []
+        for queries in ICP1_PRESETS.values():
+            result.extend(queries)
+        return result
+    return ICP1_PRESETS.get(preset, ICP1_PRESETS["fmcg"])
+
+
+def build_queries(base_query: str | None = None, preset: str = "all") -> list[str]:
+    raw_queries = []
+    if base_query:
+        raw_queries.extend(line.strip() for line in base_query.splitlines() if line.strip())
+    if not raw_queries:
+        raw_queries = preset_queries(preset)
 
     result: list[str] = []
     seen: set[str] = set()
-
-    for template in BASE_TEMPLATES:
-        base = template.format(q=q).strip()
-        variants = [base]
-        variants.extend(f"{base} {suffix}" for suffix in NEGATIVE_SUFFIXES)
+    for query in raw_queries:
+        variants = [
+            query,
+            f"{query} производитель",
+            f"{query} собственный бренд",
+            f"{query} интернет-магазин",
+            f"{query} {NEGATIVE_SUFFIX}",
+        ]
         for value in variants:
             key = value.lower()
             if key in seen:
                 continue
             seen.add(key)
             result.append(value)
-
-    return result[:10]
+    return result[:18]

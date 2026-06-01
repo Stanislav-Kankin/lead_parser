@@ -2,7 +2,7 @@ import logging
 from datetime import datetime, timedelta
 from typing import Iterable
 
-from sqlalchemy import case, desc, or_, select
+from sqlalchemy import case, desc, func, or_, select
 
 from models.lead import Lead
 from storage.db import SeenAuthor, SessionLocal
@@ -42,8 +42,12 @@ def save_leads(leads: Iterable[dict]) -> dict:
                 "domain_normalized": domain_normalized,
                 "root_domain": root_domain,
                 "source": item.get("source", "ddgs"),
+                "source_url": item.get("source_url") or item.get("url"),
                 "is_icp": item.get("is_icp", False),
+                "icp_score": int(item.get("icp_score") or item.get("score") or 0),
                 "icp_reason": item.get("icp_reason"),
+                "evidence": item.get("evidence"),
+                "outreach_angle": item.get("outreach_angle"),
                 "hypothesis": item.get("hypothesis"),
                 "opener": item.get("opener"),
                 "cjm_stage": item.get("cjm_stage"),
@@ -108,6 +112,84 @@ def get_last_leads(limit: int = 10, only_with_contacts: bool = True) -> list[Lea
             desc(Lead.created_at),
         ).limit(limit)
         return list(session.execute(stmt).scalars().all())
+
+
+def get_web_leads(
+    *,
+    limit: int = 50,
+    offset: int = 0,
+    only_icp: bool = False,
+    status: str | None = None,
+    min_score: int | None = None,
+    query: str | None = None,
+) -> list[Lead]:
+    with SessionLocal() as session:
+        stmt = select(Lead)
+        if only_icp:
+            stmt = stmt.where(Lead.is_icp.is_(True))
+        if status:
+            stmt = stmt.where(Lead.status == status)
+        if min_score is not None:
+            stmt = stmt.where(Lead.icp_score >= min_score)
+        if query:
+            needle = f"%{query.strip()}%"
+            stmt = stmt.where(
+                or_(
+                    Lead.company_name.ilike(needle),
+                    Lead.domain.ilike(needle),
+                    Lead.title.ilike(needle),
+                    Lead.icp_reason.ilike(needle),
+                    Lead.evidence.ilike(needle),
+                )
+            )
+
+        stmt = stmt.order_by(
+            desc(Lead.is_icp),
+            desc(Lead.icp_score),
+            desc(Lead.has_contacts),
+            desc(Lead.updated_at),
+            desc(Lead.created_at),
+        ).offset(offset).limit(limit)
+        return list(session.execute(stmt).scalars().all())
+
+
+def count_web_leads(
+    *,
+    only_icp: bool = False,
+    status: str | None = None,
+    min_score: int | None = None,
+) -> int:
+    with SessionLocal() as session:
+        stmt = select(func.count(Lead.id))
+        if only_icp:
+            stmt = stmt.where(Lead.is_icp.is_(True))
+        if status:
+            stmt = stmt.where(Lead.status == status)
+        if min_score is not None:
+            stmt = stmt.where(Lead.icp_score >= min_score)
+        return int(session.execute(stmt).scalar_one() or 0)
+
+
+def update_web_lead(
+    lead_id: int,
+    *,
+    status: str | None = None,
+    owner: str | None = None,
+    comment: str | None = None,
+) -> bool:
+    with SessionLocal() as session:
+        item = session.get(Lead, lead_id)
+        if item is None:
+            return False
+        if status is not None:
+            item.status = status
+        if owner is not None:
+            item.owner = owner or None
+        if comment is not None:
+            item.comment = comment or None
+        item.updated_at = datetime.utcnow()
+        session.commit()
+        return True
 
 
 def get_seen_author(author_id: str | None) -> SeenAuthor | None:

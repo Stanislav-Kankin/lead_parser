@@ -4,3 +4,7 @@ sqlalchemy
 python-dotenv
 telethon
 openpyxl
+httpx
+beautifulsoup4
+lxml
+ddgs

@@ -1,6 +1,6 @@
 from datetime import datetime
 
-from sqlalchemy import Boolean, Column, DateTime, Integer, String
+from sqlalchemy import Boolean, Column, DateTime, Integer, String, Text
 from sqlalchemy.orm import declarative_base
 
 Base = declarative_base()
@@ -16,9 +16,13 @@ class Lead(Base):
     domain_normalized = Column(String, nullable=False, unique=True)
     root_domain = Column(String, nullable=True)
     source = Column(String, nullable=False, default="ddgs")
+    source_url = Column(String, nullable=True)
 
     is_icp = Column(Boolean, nullable=False, default=False)
+    icp_score = Column(Integer, nullable=False, default=0)
     icp_reason = Column(String, nullable=True)
+    evidence = Column(Text, nullable=True)
+    outreach_angle = Column(Text, nullable=True)
     hypothesis = Column(String, nullable=True)
     opener = Column(String, nullable=True)
     cjm_stage = Column(String, nullable=True)

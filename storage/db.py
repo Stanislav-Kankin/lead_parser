@@ -117,6 +117,10 @@ REQUIRED_COLUMNS = {
     "last_enriched_at": "ALTER TABLE leads ADD COLUMN last_enriched_at DATETIME",
     "domain_normalized": "ALTER TABLE leads ADD COLUMN domain_normalized VARCHAR",
     "root_domain": "ALTER TABLE leads ADD COLUMN root_domain VARCHAR",
+    "source_url": "ALTER TABLE leads ADD COLUMN source_url VARCHAR",
+    "icp_score": "ALTER TABLE leads ADD COLUMN icp_score INTEGER DEFAULT 0",
+    "evidence": "ALTER TABLE leads ADD COLUMN evidence TEXT",
+    "outreach_angle": "ALTER TABLE leads ADD COLUMN outreach_angle TEXT",
 }
 
 SEARCH_PROFILE_REQUIRED_COLUMNS = {
@@ -142,6 +146,7 @@ def _ensure_columns():
         conn.execute(text("UPDATE leads SET has_contacts = CASE WHEN company_email IS NOT NULL OR company_phone IS NOT NULL THEN 1 ELSE COALESCE(has_contacts, 0) END"))
         conn.execute(text("UPDATE leads SET sales_ready = CASE WHEN COALESCE(is_icp, 0) = 1 AND COALESCE(has_contacts, 0) = 1 THEN 1 ELSE 0 END"))
         conn.execute(text("UPDATE leads SET contact_confidence = COALESCE(contact_confidence, CASE WHEN company_inn IS NOT NULL OR company_legal_name IS NOT NULL THEN 'high' WHEN company_email IS NOT NULL AND company_phone IS NOT NULL THEN 'medium' WHEN company_email IS NOT NULL OR company_phone IS NOT NULL THEN 'low' ELSE 'low' END)"))
+        conn.execute(text("UPDATE leads SET icp_score = COALESCE(icp_score, 0)"))
 
 
 

@@ -11,6 +11,7 @@ from fastapi import BackgroundTasks, FastAPI, Request
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, RedirectResponse
 
 from storage.db import init_db
+from storage.lead_repository import count_web_leads, get_web_leads, update_web_lead
 from telegram_signals.exporter import export_signals_to_xlsx
 from telegram_signals.keywords import CHAT_BAD_HINTS, CHAT_DISCOVERY_KEYWORDS, CHAT_GOOD_HINTS, SEGMENT_LABELS
 from telegram_signals.repository import (
@@ -30,9 +31,18 @@ from telegram_signals.repository import (
 )
 from telegram_signals.service import collect_signals
 from utils.time_format import format_msk
+from web_finder import collect_web_icp_leads
 
-app = FastAPI(title="Telegram Signals")
+app = FastAPI(title="AdBeam ICP Finder")
 logger = logging.getLogger(__name__)
+
+WEB_JOB = {
+    "running": False,
+    "last_started_at": None,
+    "last_finished_at": None,
+    "last_error": None,
+    "last_result": None,
+}
 
 DASHBOARD_JOB = {
     "running": False,
@@ -123,7 +133,350 @@ def startup():
 
 @app.get("/")
 def root():
-    return RedirectResponse("/telegram-signals", status_code=302)
+    return RedirectResponse("/web-leads", status_code=302)
+
+
+def _run_web_collect_job(preset: str = "all", custom_queries: str | None = None, total_limit: int = 40) -> None:
+    with JOB_LOCK:
+        if WEB_JOB["running"]:
+            return
+        WEB_JOB.update(
+            {
+                "running": True,
+                "last_started_at": format_msk(datetime.utcnow()),
+                "last_finished_at": None,
+                "last_error": None,
+                "last_result": None,
+            }
+        )
+
+    try:
+        result = asyncio.run(
+            collect_web_icp_leads(
+                preset=preset,
+                custom_queries=custom_queries,
+                total_limit=max(5, min(120, int(total_limit or 40))),
+            )
+        )
+        with JOB_LOCK:
+            WEB_JOB.update(
+                {
+                    "running": False,
+                    "last_finished_at": format_msk(datetime.utcnow()),
+                    "last_error": None,
+                    "last_result": result,
+                }
+            )
+    except Exception as exc:
+        logger.exception("Web ICP collection failed")
+        with JOB_LOCK:
+            WEB_JOB.update(
+                {
+                    "running": False,
+                    "last_finished_at": format_msk(datetime.utcnow()),
+                    "last_error": str(exc),
+                    "last_result": None,
+                }
+            )
+
+
+@app.post("/web-leads/search")
+async def start_web_leads_search(request: Request, background_tasks: BackgroundTasks):
+    form = {key: values[-1] for key, values in parse_qs((await request.body()).decode("utf-8")).items()}
+    preset = str(form.get("preset") or "all")
+    custom_queries = str(form.get("custom_queries") or "").strip()
+    total_limit = int(form.get("total_limit") or 40)
+    with JOB_LOCK:
+        running = bool(WEB_JOB["running"])
+    if not running:
+        background_tasks.add_task(_run_web_collect_job, preset, custom_queries or None, total_limit)
+    return RedirectResponse("/web-leads", status_code=303)
+
+
+@app.get("/web-leads/job-status")
+def web_leads_job_status():
+    with JOB_LOCK:
+        return JSONResponse(dict(WEB_JOB))
+
+
+@app.post("/web-leads/{lead_id}/crm")
+async def update_web_lead_from_dashboard(lead_id: int, request: Request):
+    form = {key: values[-1] for key, values in parse_qs((await request.body()).decode("utf-8")).items()}
+    update_web_lead(
+        lead_id,
+        status=str(form.get("status") or "new"),
+        owner=str(form.get("owner") or ""),
+        comment=str(form.get("comment") or ""),
+    )
+    return RedirectResponse(_return_url(request), status_code=303)
+
+
+@app.get("/web-leads", response_class=HTMLResponse)
+def web_leads_dashboard(
+    request: Request,
+    status: str = "",
+    min_score: int = 0,
+    q: str = "",
+    page: int = 1,
+    per_page: int = 40,
+):
+    page = max(1, page)
+    per_page = max(10, min(100, per_page))
+    offset = (page - 1) * per_page
+    items = get_web_leads(
+        limit=per_page,
+        offset=offset,
+        status=status or None,
+        min_score=min_score or None,
+        query=q or None,
+    )
+
+    with JOB_LOCK:
+        web_job = dict(WEB_JOB)
+
+    def nav_button(label: str, href: str, active: bool = False) -> str:
+        cls = "nav-pill active" if active else "nav-pill"
+        return f'<a class="{cls}" href="{escape(href)}">{escape(label)}</a>'
+
+    def metric(label: str, value: int) -> str:
+        return f"<div class='metric'><b>{value}</b><span>{escape(label)}</span></div>"
+
+    def badge(text: str, tone: str = "") -> str:
+        return f"<span class='badge {tone}'>{escape(text)}</span>"
+
+    def lead_card(item) -> str:
+        site = f"https://{escape(item.domain_normalized or item.domain)}"
+        score_tone = "hot" if int(item.icp_score or 0) >= 70 else "warm" if int(item.icp_score or 0) >= 45 else "cold"
+        contacts = []
+        if item.company_email:
+            contacts.append(f"<a href='mailto:{escape(item.company_email)}'>{escape(item.company_email)}</a>")
+        if item.company_phone:
+            contacts.append(escape(item.company_phone))
+        if not contacts:
+            contacts.append("контакты не найдены")
+        evidence = escape(item.evidence or item.icp_reason or "нет доказательств").replace("\n", "<br>")
+        opener = escape(item.opener or "")
+        hypothesis = escape(item.hypothesis or "")
+        angle = escape(item.outreach_angle or "")
+        title = escape(item.title or item.company_name or item.domain)
+        legal = escape(item.company_legal_name or "")
+        status_value = escape(item.status or "new")
+        return f"""
+        <article class="lead-card">
+          <div class="lead-main">
+            <div class="lead-topline">
+              <div>
+                <a class="lead-title" href="{site}" target="_blank" rel="noreferrer">{title}</a>
+                <div class="domain">{escape(item.domain_normalized or item.domain)} {f" · {legal}" if legal else ""}</div>
+              </div>
+              <div class="score {score_tone}">{int(item.icp_score or 0)}</div>
+            </div>
+            <div class="badges">
+              {badge("ICP" if item.is_icp else "проверить", "ok" if item.is_icp else "")}
+              {badge(item.lead_type or "unknown")}
+              {badge(item.priority or "low")}
+              {badge(item.cjm_stage or "signal_only")}
+              {badge("контакты есть", "ok") if item.has_contacts else badge("нет контактов")}
+            </div>
+            <div class="columns">
+              <section>
+                <h3>Почему подходит</h3>
+                <p>{evidence}</p>
+              </section>
+              <section>
+                <h3>Гипотеза</h3>
+                <p>{hypothesis}</p>
+              </section>
+              <section>
+                <h3>Заход</h3>
+                <p>{angle}</p>
+              </section>
+            </div>
+            <details>
+              <summary>Черновик первого сообщения</summary>
+              <p>{opener}</p>
+            </details>
+          </div>
+          <aside class="lead-side">
+            <div class="side-block">
+              <b>Контакты</b>
+              <p>{"<br>".join(contacts)}</p>
+            </div>
+            <form method="post" action="/web-leads/{item.id}/crm">
+              <label>Статус
+                <select name="status">
+                  {"".join(f"<option value='{escape(value)}' {_selected(status_value, value)}>{escape(label)}</option>" for value, label in STATUS_LABELS.items())}
+                </select>
+              </label>
+              <label>Ответственный <input name="owner" value="{escape(item.owner or '')}"></label>
+              <label>Комментарий <textarea name="comment">{escape(item.comment or '')}</textarea></label>
+              <button class="primary-btn" type="submit">Сохранить</button>
+            </form>
+          </aside>
+        </article>
+        """
+
+    result = web_job.get("last_result") or {}
+    if web_job.get("running"):
+        job_text = "Идет web-поиск и анализ сайтов..."
+    elif web_job.get("last_error"):
+        job_text = f"Ошибка: {web_job['last_error']}"
+    elif result:
+        job_text = (
+            f"Последний сбор: {result.get('created', 0)} новых, {result.get('updated', 0)} обновлено, "
+            f"{result.get('analyzed', 0)} сайтов проанализировано. Завершен: {web_job.get('last_finished_at')}"
+        )
+    else:
+        job_text = "Web-поиск еще не запускался."
+
+    query_params = {"status": status, "min_score": min_score, "q": q, "per_page": per_page}
+    prev_params = {**query_params, "page": max(1, page - 1)}
+    next_params = {**query_params, "page": page + 1}
+
+    cards = "".join(lead_card(item) for item in items) or "<div class='empty'>Компаний под эти фильтры пока нет.</div>"
+
+    return f"""
+    <!doctype html>
+    <html lang="ru">
+    <head>
+      <meta charset="utf-8" />
+      <meta name="viewport" content="width=device-width, initial-scale=1" />
+      <title>AdBeam ICP Finder</title>
+      <style>
+        :root {{ --bg:#eef3f7; --panel:#fff; --text:#0f172a; --muted:#64748b; --line:#d8e1ea; --blue:#2563eb; --green:#059669; --red:#dc2626; --amber:#b7791f; }}
+        * {{ box-sizing:border-box; }}
+        body {{ margin:0; background:var(--bg); color:var(--text); font:14px/1.45 Inter, -apple-system, BlinkMacSystemFont, "Segoe UI", Arial, sans-serif; }}
+        .page {{ max-width:1280px; margin:0 auto; padding:24px 22px 56px; }}
+        a {{ color:inherit; text-decoration:none; }}
+        h1 {{ margin:0; font-size:30px; letter-spacing:0; }}
+        h3 {{ margin:0 0 6px; font-size:12px; color:var(--muted); text-transform:uppercase; }}
+        p {{ margin:0; }}
+        .topbar {{ display:flex; justify-content:space-between; gap:18px; align-items:flex-start; margin-bottom:16px; }}
+        .subtitle {{ color:var(--muted); max-width:760px; margin-top:6px; }}
+        .nav {{ display:flex; flex-wrap:wrap; gap:8px; justify-content:flex-end; }}
+        .nav-pill, .link-btn, .primary-btn {{ min-height:36px; display:inline-flex; align-items:center; border-radius:7px; padding:0 12px; border:1px solid var(--line); background:#fff; cursor:pointer; }}
+        .nav-pill.active, .primary-btn {{ background:var(--blue); border-color:var(--blue); color:#fff; font-weight:700; }}
+        .metrics {{ display:grid; grid-template-columns:repeat(4, minmax(0, 1fr)); gap:10px; margin-bottom:12px; }}
+        .metric {{ background:#fff; border:1px solid var(--line); border-radius:8px; padding:12px; min-height:78px; }}
+        .metric b {{ display:block; font-size:24px; }}
+        .metric span {{ color:var(--muted); }}
+        .search-panel {{ background:#fff; border:1px solid var(--line); border-radius:8px; padding:12px; margin-bottom:12px; }}
+        .search-form {{ display:grid; grid-template-columns:180px 1fr 96px 132px; gap:10px; align-items:end; }}
+        label {{ display:grid; gap:5px; color:var(--muted); font-size:12px; }}
+        input, select, textarea {{ width:100%; border:1px solid #cbd5e1; border-radius:7px; padding:8px 10px; font:inherit; color:var(--text); background:#fff; }}
+        input, select {{ height:36px; }}
+        textarea {{ min-height:70px; resize:vertical; }}
+        .job {{ margin-top:8px; color:var(--green); }}
+        .filters {{ display:grid; grid-template-columns:120px 120px 1fr 110px; gap:8px; align-items:end; margin:12px 0; }}
+        .pager {{ display:flex; justify-content:space-between; align-items:center; color:var(--muted); margin:10px 0; }}
+        .pager-actions {{ display:flex; gap:8px; }}
+        .lead-card {{ display:grid; grid-template-columns:minmax(0,1fr) 260px; gap:14px; background:#fff; border:1px solid var(--line); border-radius:8px; padding:14px; margin-bottom:12px; }}
+        .lead-topline {{ display:flex; justify-content:space-between; gap:12px; }}
+        .lead-title {{ display:block; font-size:20px; font-weight:800; }}
+        .domain {{ color:var(--muted); margin-top:2px; }}
+        .score {{ width:52px; height:52px; display:grid; place-items:center; border-radius:8px; font-size:22px; font-weight:900; background:#eef2ff; color:#1d4ed8; flex:0 0 auto; }}
+        .score.hot {{ background:#dcfce7; color:#047857; }}
+        .score.warm {{ background:#fef3c7; color:#92400e; }}
+        .score.cold {{ background:#e2e8f0; color:#475569; }}
+        .badges {{ display:flex; flex-wrap:wrap; gap:6px; margin:10px 0; }}
+        .badge {{ border:1px solid var(--line); border-radius:999px; padding:4px 9px; font-size:12px; color:#334155; }}
+        .badge.ok {{ background:#ecfdf5; border-color:#bbf7d0; color:#047857; }}
+        .columns {{ display:grid; grid-template-columns:1fr 1fr 1fr; gap:12px; border-top:1px solid var(--line); padding-top:12px; }}
+        .columns section {{ min-width:0; }}
+        details {{ margin-top:12px; border-top:1px solid var(--line); padding-top:10px; color:#334155; }}
+        summary {{ cursor:pointer; color:var(--blue); font-weight:700; }}
+        .lead-side {{ border-left:1px solid var(--line); padding-left:14px; }}
+        .lead-side form {{ display:grid; gap:8px; }}
+        .side-block {{ margin-bottom:10px; }}
+        .side-block p {{ color:#334155; margin-top:4px; }}
+        .empty {{ background:#fff; border:1px solid var(--line); border-radius:8px; padding:28px; color:var(--muted); }}
+        @media (max-width:980px) {{ .topbar, .lead-card {{ display:block; }} .nav {{ justify-content:flex-start; margin-top:12px; }} .metrics, .columns, .search-form, .filters {{ grid-template-columns:1fr; }} .lead-side {{ border-left:0; border-top:1px solid var(--line); padding:12px 0 0; margin-top:12px; }} }}
+      </style>
+    </head>
+    <body>
+      <main class="page">
+        <div class="topbar">
+          <div>
+            <h1>ICP Finder</h1>
+            <div class="subtitle">Ищем не сообщения в чатах, а компании: производители и бренды со своим продуктом, сайтом, каналами продаж и вероятной задачей роста вне одной площадки.</div>
+          </div>
+          <nav class="nav">
+            {nav_button("Web ICP", "/web-leads", True)}
+            {nav_button("Telegram", "/telegram-signals")}
+            {nav_button("Настройки TG", "/telegram-signals/settings")}
+          </nav>
+        </div>
+
+        <section class="metrics">
+          {metric("всего компаний", count_web_leads())}
+          {metric("ICP score 70+", count_web_leads(min_score=70))}
+          {metric("ICP score 45+", count_web_leads(min_score=45))}
+          {metric("готовы к контакту", count_web_leads(only_icp=True, status="new"))}
+        </section>
+
+        <section class="search-panel">
+          <form method="post" action="/web-leads/search" class="search-form">
+            <label>Сегмент
+              <select name="preset">
+                <option value="all">Все ICP1</option>
+                <option value="fmcg">FMCG / еда</option>
+                <option value="beauty">Beauty / household</option>
+                <option value="household">Дом / быт</option>
+                <option value="kids">Детские товары</option>
+                <option value="fashion">Одежда</option>
+                <option value="marketplace_brand">Бренды на MP</option>
+                <option value="exhibitors">Выставки</option>
+              </select>
+            </label>
+            <label>Свои поисковые запросы <textarea name="custom_queries" placeholder="Можно оставить пустым. По одному запросу на строку."></textarea></label>
+            <label>Лимит <input type="number" name="total_limit" min="5" max="120" value="40"></label>
+            <button class="primary-btn" type="submit">Запустить поиск</button>
+          </form>
+          <div class="job" id="job-text">{escape(job_text)}</div>
+        </section>
+
+        <form method="get" action="/web-leads" class="filters">
+          <label>Score от <input type="number" name="min_score" value="{int(min_score or 0)}" min="0" max="100"></label>
+          <label>Статус <select name="status">
+            <option value="">Все</option>
+            {"".join(f"<option value='{escape(value)}' {_selected(status, value)}>{escape(label)}</option>" for value, label in STATUS_LABELS.items())}
+          </select></label>
+          <label>Поиск <input name="q" value="{escape(q or '')}" placeholder="домен, название, причина"></label>
+          <button class="primary-btn" type="submit">Фильтр</button>
+        </form>
+
+        <div class="pager">
+          <span>Страница {page}. Показано {len(items)}.</span>
+          <div class="pager-actions">
+            <a class="link-btn" href="/web-leads?{escape(urlencode(prev_params))}">Назад</a>
+            <a class="link-btn" href="/web-leads?{escape(urlencode(next_params))}">Вперед</a>
+          </div>
+        </div>
+        {cards}
+      </main>
+      <script>
+        async function pollJob() {{
+          try {{
+            const response = await fetch('/web-leads/job-status', {{ cache: 'no-store' }});
+            const job = await response.json();
+            const el = document.getElementById('job-text');
+            if (!el) return;
+            if (job.running) {{
+              el.textContent = 'Идет web-поиск и анализ сайтов...';
+              setTimeout(pollJob, 2500);
+              return;
+            }}
+            if (job.last_result) {{
+              const r = job.last_result;
+              el.textContent = `Последний сбор: ${{r.created || 0}} новых, ${{r.updated || 0}} обновлено, ${{r.analyzed || 0}} сайтов проанализировано.`;
+            }}
+          }} catch (e) {{}}
+        }}
+        pollJob();
+      </script>
+    </body>
+    </html>
+    """
 
 
 def _selected(current: str, value: str) -> str:
@@ -162,9 +515,9 @@ def _contact_link(item) -> str:
 
 def _return_url(request: Request) -> str:
     referer = request.headers.get("referer") or ""
-    if "/telegram-signals" in referer:
+    if "/web-leads" in referer or "/telegram-signals" in referer:
         return referer
-    return "/telegram-signals"
+    return "/web-leads"
 
 
 def _action_form(

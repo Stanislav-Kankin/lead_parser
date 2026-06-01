@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 import logging
 import re
 import time
@@ -18,7 +20,17 @@ LEGAL_NAME_RE = re.compile(r"\b((?:ООО|АО|ПАО|ЗАО|ИП)\s*[«\"]?[^\n
 
 BAD_EMAIL_PARTS = {"example.com", "email.com", "noreply", "no-reply", "sentry", "test@", "rating@", "info@example"}
 BAD_PHONE_VALUES = {"0000000000", "1111111111", "1234567890", "1010101010", "8000000000"}
-SECONDARY_PATHS = ["/contacts", "/rekvizity"]
+SECONDARY_PATHS = [
+    "/contacts",
+    "/contact",
+    "/kontakty",
+    "/rekvizity",
+    "/about",
+    "/company",
+    "/o-kompanii",
+    "/gde-kupit",
+    "/catalog",
+]
 
 
 async def analyze_domain(domain: str) -> dict:
@@ -29,32 +41,34 @@ async def analyze_domain(domain: str) -> dict:
     logger.info("[domain_analyzer] start domain=%s", normalized)
     started = time.perf_counter()
 
-    headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0 Safari/537.36"}
-    timeout = httpx.Timeout(4.0, connect=2.5)
+    headers = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+        "(KHTML, like Gecko) Chrome/123.0 Safari/537.36"
+    }
+    timeout = httpx.Timeout(6.0, connect=3.0)
     result = _empty_result()
 
     async with httpx.AsyncClient(headers=headers, timeout=timeout, follow_redirects=True, verify=False) as client:
         homepage = await _fetch_page(client, f"https://{normalized}")
+        if not homepage:
+            homepage = await _fetch_page(client, f"http://{normalized}")
         if homepage:
             result = _merge_result(result, homepage)
 
-        need_more = not (result.get("email") or result.get("phone")) or not (result.get("company_inn") or result.get("company_legal_name"))
-        if need_more:
-            for path in SECONDARY_PATHS:
-                page = await _fetch_page(client, urljoin(f"https://{normalized}", path))
-                if page:
-                    result = _merge_result(result, page)
-                if (result.get("email") or result.get("phone")) and (result.get("company_inn") or result.get("company_legal_name")):
-                    break
+        for path in SECONDARY_PATHS:
+            if _has_enough_text(result) and (result.get("email") or result.get("phone")):
+                break
+            page = await _fetch_page(client, urljoin(f"https://{normalized}", path))
+            if page:
+                result = _merge_result(result, page)
 
     elapsed = time.perf_counter() - started
     logger.info(
-        "[domain_analyzer] done domain=%s email=%s phone=%s inn=%s ogrn=%s elapsed=%.2fs",
+        "[domain_analyzer] done domain=%s email=%s phone=%s inn=%s elapsed=%.2fs",
         normalized,
         bool(result.get("email")),
         bool(result.get("phone")),
         bool(result.get("company_inn")),
-        bool(result.get("company_ogrn")),
         elapsed,
     )
     return result
@@ -87,7 +101,7 @@ async def _fetch_page(client: httpx.AsyncClient, url: str) -> dict | None:
 
     text = soup.get_text(" ", strip=True)
     text = re.sub(r"\s+", " ", text)
-    text = text[:15000]
+    text = text[:25000]
 
     email = _extract_email(text)
     phone = _extract_phone(text)
@@ -111,7 +125,6 @@ async def _fetch_page(client: httpx.AsyncClient, url: str) -> dict | None:
     }
 
 
-
 def _empty_result() -> dict:
     return {
         "title": None,
@@ -128,15 +141,17 @@ def _empty_result() -> dict:
     }
 
 
+def _has_enough_text(result: dict) -> bool:
+    return len(result.get("text") or "") >= 8000
+
 
 def _merge_result(base: dict, page: dict) -> dict:
     for key in ["title", "description", "h1", "email", "phone", "company_inn", "company_ogrn", "company_legal_name", "legal_form", "inn_source"]:
         if not base.get(key) and page.get(key):
             base[key] = page[key]
     merged_text = " ".join(part for part in [base.get("text"), page.get("text")] if part)
-    base["text"] = merged_text[:15000]
+    base["text"] = merged_text[:25000]
     return base
-
 
 
 def _extract_first(pattern: re.Pattern, text: str | None) -> str | None:
@@ -149,7 +164,6 @@ def _extract_first(pattern: re.Pattern, text: str | None) -> str | None:
     return value or None
 
 
-
 def _extract_legal_name(text: str | None) -> str | None:
     if not text:
         return None
@@ -157,11 +171,10 @@ def _extract_legal_name(text: str | None) -> str | None:
         value = re.sub(r"\s+", " ", match.group(1)).strip(" .,-;:")
         if len(value) < 4:
             continue
-        if any(bad in value.lower() for bad in ["политик", "конфиденц", "пользоват"]):
+        if any(bad in value.lower() for bad in ["политик", "конфиденц", "пользоват", "согласие"]):
             continue
         return value[:120]
     return None
-
 
 
 def _extract_legal_form(legal_name: str | None) -> str | None:
@@ -172,7 +185,6 @@ def _extract_legal_form(legal_name: str | None) -> str | None:
         if upper.startswith(form):
             return form
     return None
-
 
 
 def _extract_email(text: str | None) -> str | None:
@@ -189,18 +201,16 @@ def _extract_email(text: str | None) -> str | None:
     return None
 
 
-
 def _email_rank(email: str) -> int:
     lowered = email.lower()
     score = 0
-    if any(prefix in lowered for prefix in ["info@", "sales@", "hello@", "opt@", "b2b@", "zakaz@"]):
+    if any(prefix in lowered for prefix in ["info@", "sales@", "hello@", "opt@", "b2b@", "zakaz@", "shop@"]):
         score += 3
     if any(prefix in lowered for prefix in ["support@", "admin@", "office@"]):
         score += 1
     if lowered.endswith("@gmail.com") or lowered.endswith("@mail.ru") or lowered.endswith("@yandex.ru"):
         score -= 1
     return score
-
 
 
 def _extract_phone(text: str | None) -> str | None:
