@@ -78,56 +78,69 @@ def is_bad_domain(domain: str) -> bool:
     return any(domain == bad or domain.endswith("." + bad) for bad in BAD_DOMAINS)
 
 
-def _search_sync(queries: list[str], per_query_limit: int = 10, total_limit: int = 25) -> list[dict]:
-    collected = []
-    seen_domains = set()
+def _search_one_sync(query: str, per_query_limit: int = 10) -> list[dict]:
+    logger.info("[domain_search] query=%r", query)
+    try:
+        with DDGS(timeout=8, verify=False) as ddgs:
+            results = ddgs.text(
+                query,
+                region="ru-ru",
+                safesearch="off",
+                backend="auto",
+                max_results=per_query_limit,
+            )
+    except Exception as exc:
+        logger.warning("[domain_search] query_failed query=%r error=%s", query, exc)
+        return []
 
-    logger.info("[domain_search] start queries=%s per_query_limit=%s total_limit=%s", len(queries), per_query_limit, total_limit)
+    items = []
+    for item in results or []:
+        href = item.get("href")
+        domain = normalize_domain(href)
+        if not domain or is_bad_domain(domain):
+            continue
+        items.append(
+            {
+                "company_name": item.get("title"),
+                "domain": domain,
+                "url": href,
+                "source": "ddgs",
+                "source_query": query,
+            }
+        )
+    logger.info("[domain_search] query_done query=%r raw=%s kept=%s", query, len(results or []), len(items))
+    return items
 
-    with DDGS(timeout=10, verify=False) as ddgs:
-        for query in queries:
-            logger.info("[domain_search] query=%r", query)
-            try:
-                results = ddgs.text(
-                    query,
-                    region="ru-ru",
-                    safesearch="off",
-                    backend="auto",
-                    max_results=per_query_limit,
-                )
-            except Exception as exc:
-                logger.warning("[domain_search] query_failed query=%r error=%s", query, exc)
-                continue
 
-            query_added = 0
-            for item in results or []:
-                href = item.get("href")
-                domain = normalize_domain(href)
-                if not domain or is_bad_domain(domain) or domain in seen_domains:
-                    continue
-
-                seen_domains.add(domain)
-                collected.append({
-                    "company_name": item.get("title"),
-                    "domain": domain,
-                    "url": href,
-                    "source": "ddgs",
-                    "source_query": query,
-                })
-                query_added += 1
-
-                if len(collected) >= total_limit:
-                    logger.info("[domain_search] reached_limit collected=%s", len(collected))
-                    return collected
-
-            logger.info("[domain_search] query_done query=%r added=%s total=%s", query, query_added, len(collected))
-
-    logger.info("[domain_search] done total=%s", len(collected))
-    return collected
+async def _search_one(query: str, per_query_limit: int, semaphore: asyncio.Semaphore) -> list[dict]:
+    async with semaphore:
+        try:
+            return await asyncio.wait_for(
+                asyncio.to_thread(_search_one_sync, query, per_query_limit),
+                timeout=18,
+            )
+        except asyncio.TimeoutError:
+            logger.warning("[domain_search] query_timeout query=%r", query)
+            return []
 
 
 async def search_domains_multi(queries: list[str], per_query_limit: int = 10, total_limit: int = 25) -> list[dict]:
-    return await asyncio.wait_for(
-        asyncio.to_thread(_search_sync, queries, per_query_limit, total_limit),
-        timeout=30,
-    )
+    logger.info("[domain_search] start queries=%s per_query_limit=%s total_limit=%s", len(queries), per_query_limit, total_limit)
+    semaphore = asyncio.Semaphore(2)
+    batches = await asyncio.gather(*(_search_one(query, per_query_limit, semaphore) for query in queries))
+
+    collected = []
+    seen_domains = set()
+    for batch in batches:
+        for item in batch:
+            domain = item.get("domain")
+            if not domain or domain in seen_domains:
+                continue
+            seen_domains.add(domain)
+            collected.append(item)
+            if len(collected) >= total_limit:
+                logger.info("[domain_search] reached_limit collected=%s", len(collected))
+                return collected
+
+    logger.info("[domain_search] done total=%s", len(collected))
+    return collected

@@ -530,6 +530,18 @@ def web_leads_dashboard(
         .side-block {{ margin-bottom:10px; }}
         .side-block p {{ color:#334155; margin-top:4px; }}
         .empty {{ background:#fff; border:1px solid var(--line); border-radius:8px; padding:28px; color:var(--muted); }}
+        .modal-overlay {{ position:fixed; inset:0; z-index:50; display:none; align-items:center; justify-content:center; padding:20px; background:rgba(15,23,42,.46); }}
+        .modal-overlay.show {{ display:flex; }}
+        .result-modal {{ width:min(520px,100%); background:#fff; border-radius:10px; border:1px solid var(--line); box-shadow:0 24px 70px rgba(15,23,42,.24); overflow:hidden; }}
+        .modal-head {{ display:flex; align-items:flex-start; justify-content:space-between; gap:16px; padding:18px 18px 8px; }}
+        .modal-head h2 {{ margin:0; font-size:22px; }}
+        .modal-head p {{ color:var(--muted); margin-top:4px; }}
+        .modal-close {{ width:34px; height:34px; border-radius:7px; border:1px solid var(--line); background:#fff; cursor:pointer; font-size:22px; line-height:1; }}
+        .modal-stats {{ display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:10px; padding:12px 18px 18px; }}
+        .modal-stat {{ border:1px solid var(--line); border-radius:8px; padding:10px; }}
+        .modal-stat b {{ display:block; font-size:24px; }}
+        .modal-stat span {{ color:var(--muted); }}
+        .modal-foot {{ display:flex; justify-content:flex-end; gap:8px; border-top:1px solid var(--line); padding:12px 18px; background:#f8fafc; }}
         @media (max-width:980px) {{ .topbar, .lead-card {{ display:block; }} .nav {{ justify-content:flex-start; margin-top:12px; }} .metrics, .columns, .search-form, .filters, .template-controls, .template-editor {{ grid-template-columns:1fr; }} .lead-side {{ border-left:0; border-top:1px solid var(--line); padding:12px 0 0; margin-top:12px; }} }}
       </style>
     </head>
@@ -538,7 +550,7 @@ def web_leads_dashboard(
         <div class="topbar">
           <div>
             <h1>ICP Finder</h1>
-            <div class="subtitle">Ищем не сообщения в чатах, а компании: производители и бренды со своим продуктом, сайтом, каналами продаж и вероятной задачей роста вне одной площадки.</div>
+            <div class="subtitle">Поиск в сети ICP 1 по запросам. Полуавтоматический режим.</div>
           </div>
           <nav class="nav">
             {nav_button("Web ICP", "/web-leads", True)}
@@ -622,6 +634,22 @@ def web_leads_dashboard(
         </div>
         {cards}
       </main>
+      <div class="modal-overlay" id="job-modal" aria-hidden="true">
+        <section class="result-modal" role="dialog" aria-modal="true" aria-labelledby="job-modal-title">
+          <div class="modal-head">
+            <div>
+              <h2 id="job-modal-title">Поиск закончен</h2>
+              <p id="job-modal-subtitle">Свежие результаты уже сохранены в базе.</p>
+            </div>
+            <button class="modal-close" type="button" aria-label="Закрыть" id="job-modal-close">×</button>
+          </div>
+          <div class="modal-stats" id="job-modal-stats"></div>
+          <div class="modal-foot">
+            <a class="link-btn" href="/web-leads/export">Excel</a>
+            <button class="primary-btn" type="button" id="job-modal-refresh">Показать результаты</button>
+          </div>
+        </section>
+      </div>
       <script>
         const queryTemplates = {query_templates_json};
         function uniqueLines(lines) {{
@@ -656,6 +684,46 @@ def web_leads_dashboard(
             textarea.focus();
           }});
         }});
+        function showJobModal(job) {{
+          const modal = document.getElementById('job-modal');
+          const title = document.getElementById('job-modal-title');
+          const subtitle = document.getElementById('job-modal-subtitle');
+          const stats = document.getElementById('job-modal-stats');
+          if (!modal || !title || !subtitle || !stats) return;
+          const r = job.last_result || {{}};
+          if (job.last_error) {{
+            title.textContent = 'Поиск остановился';
+            subtitle.textContent = job.last_error || 'Ошибка во время сбора.';
+            stats.innerHTML = '';
+          }} else {{
+            title.textContent = 'Поиск закончен';
+            subtitle.textContent = `Готово: ${{job.last_finished_at || 'только что'}}. Закрой окно, чтобы обновить выдачу.`;
+            const rows = [
+              ['Новых', r.created || 0],
+              ['Обновлено', r.updated || 0],
+              ['Проанализировано сайтов', r.analyzed || 0],
+              ['Оставлено в базе', r.kept || 0],
+              ['Кандидатов из поиска', r.candidates || 0],
+              ['Пропущено', r.skipped || 0],
+            ];
+            stats.innerHTML = rows.map(([label, value]) => `<div class="modal-stat"><b>${{value}}</b><span>${{label}}</span></div>`).join('');
+          }}
+          modal.classList.add('show');
+          modal.setAttribute('aria-hidden', 'false');
+        }}
+        function closeJobModal() {{
+          window.location.reload();
+        }}
+        document.getElementById('job-modal-close')?.addEventListener('click', closeJobModal);
+        document.getElementById('job-modal-refresh')?.addEventListener('click', closeJobModal);
+        document.getElementById('job-modal')?.addEventListener('click', (event) => {{
+          if (event.target && event.target.id === 'job-modal') closeJobModal();
+        }});
+        document.addEventListener('keydown', (event) => {{
+          if (event.key === 'Escape' && document.getElementById('job-modal')?.classList.contains('show')) {{
+            closeJobModal();
+          }}
+        }});
         let webJobWasRunning = false;
         async function pollJob() {{
           try {{
@@ -670,7 +738,8 @@ def web_leads_dashboard(
               return;
             }}
             if (webJobWasRunning) {{
-              window.location.reload();
+              showJobModal(job);
+              webJobWasRunning = false;
               return;
             }}
             if (job.last_result) {{
