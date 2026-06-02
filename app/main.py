@@ -455,6 +455,7 @@ def web_leads_dashboard(
         {cards}
       </main>
       <script>
+        let webJobWasRunning = false;
         async function pollJob() {{
           try {{
             const response = await fetch('/web-leads/job-status', {{ cache: 'no-store' }});
@@ -462,8 +463,13 @@ def web_leads_dashboard(
             const el = document.getElementById('job-text');
             if (!el) return;
             if (job.running) {{
+              webJobWasRunning = true;
               el.textContent = 'Идет web-поиск и анализ сайтов...';
               setTimeout(pollJob, 2500);
+              return;
+            }}
+            if (webJobWasRunning) {{
+              window.location.reload();
               return;
             }}
             if (job.last_result) {{
