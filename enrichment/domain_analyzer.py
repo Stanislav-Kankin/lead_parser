@@ -3,7 +3,7 @@ from __future__ import annotations
 import logging
 import re
 import time
-from urllib.parse import urljoin
+from urllib.parse import urljoin, urlparse
 
 import httpx
 from bs4 import BeautifulSoup
@@ -22,12 +22,28 @@ BAD_EMAIL_PARTS = {"example.com", "email.com", "noreply", "no-reply", "sentry", 
 BAD_PHONE_VALUES = {"0000000000", "1111111111", "1234567890", "1010101010", "8000000000"}
 SECONDARY_PATHS = [
     "/contacts",
+    "/contacts/",
+    "/contacts.html",
     "/contact",
+    "/contact/",
+    "/contact-us",
     "/kontakty",
+    "/kontakty/",
+    "/kontakty.html",
+    "/kontakti",
+    "/kontakt",
     "/rekvizity",
+    "/rekvizity/",
+    "/about/contacts",
+    "/about/kontakty",
+    "/company/contacts",
+    "/company/kontakty",
+    "/company/rekvizity",
     "/about",
     "/company",
     "/o-kompanii",
+    "/filialy",
+    "/stores",
     "/gde-kupit",
     "/catalog",
     "/katalog",
@@ -101,10 +117,11 @@ async def analyze_domain(domain: str) -> dict:
         if homepage:
             result = _merge_result(result, homepage)
 
-        for path in SECONDARY_PATHS:
-            if _has_enough_text(result) and (result.get("email") or result.get("phone")):
+        contact_urls = _build_followup_urls(normalized, result.get("contact_links") or [])
+        for url in contact_urls:
+            if _has_enough_contacts(result):
                 break
-            page = await _fetch_page(client, urljoin(f"https://{normalized}", path))
+            page = await _fetch_page(client, url)
             if page:
                 result = _merge_result(result, page)
 
@@ -142,6 +159,10 @@ async def _fetch_page(client: httpx.AsyncClient, url: str) -> dict | None:
     h1 = soup.find("h1")
     h1_text = h1.get_text(" ", strip=True) if h1 else None
 
+    attr_email = _extract_email_from_links(soup)
+    attr_phone = _extract_phone_from_links(soup)
+    contact_links = _extract_contact_links(soup, str(response.url))
+
     for tag in soup(["script", "style", "noscript"]):
         tag.extract()
 
@@ -149,8 +170,8 @@ async def _fetch_page(client: httpx.AsyncClient, url: str) -> dict | None:
     text = re.sub(r"\s+", " ", text)
     text = text[:25000]
 
-    email = _extract_email(text)
-    phone = _extract_phone(text)
+    email = attr_email or _extract_email(text)
+    phone = attr_phone or _extract_phone(text)
     inn = _extract_first(INN_RE, text)
     ogrn = _extract_first(OGRN_RE, text)
     legal_name = _extract_legal_name(text)
@@ -168,6 +189,7 @@ async def _fetch_page(client: httpx.AsyncClient, url: str) -> dict | None:
         "company_legal_name": legal_name,
         "legal_form": legal_form,
         "inn_source": "site_requisites" if inn or legal_name else None,
+        "contact_links": contact_links,
         **_analyze_commerce(soup, text),
     }
 
@@ -185,6 +207,7 @@ def _empty_result() -> dict:
         "company_legal_name": None,
         "legal_form": None,
         "inn_source": None,
+        "contact_links": [],
         "has_catalog": False,
         "has_cart": False,
         "ecommerce_score": 0,
@@ -197,10 +220,15 @@ def _has_enough_text(result: dict) -> bool:
     return len(result.get("text") or "") >= 8000
 
 
+def _has_enough_contacts(result: dict) -> bool:
+    return bool(result.get("email") and result.get("phone"))
+
+
 def _merge_result(base: dict, page: dict) -> dict:
     for key in ["title", "description", "h1", "email", "phone", "company_inn", "company_ogrn", "company_legal_name", "legal_form", "inn_source"]:
         if not base.get(key) and page.get(key):
             base[key] = page[key]
+    base["contact_links"] = _merge_unique(base.get("contact_links") or [], page.get("contact_links") or [], limit=12)
     for key in ["has_catalog", "has_cart"]:
         base[key] = bool(base.get(key) or page.get(key))
     if int(page.get("ecommerce_score") or 0) > int(base.get("ecommerce_score") or 0):
@@ -210,6 +238,89 @@ def _merge_result(base: dict, page: dict) -> dict:
     merged_text = " ".join(part for part in [base.get("text"), page.get("text")] if part)
     base["text"] = merged_text[:25000]
     return base
+
+
+def _merge_unique(first: list[str], second: list[str], limit: int = 20) -> list[str]:
+    result: list[str] = []
+    seen: set[str] = set()
+    for value in [*first, *second]:
+        key = str(value).strip()
+        if not key or key in seen:
+            continue
+        seen.add(key)
+        result.append(key)
+        if len(result) >= limit:
+            break
+    return result
+
+
+def _build_followup_urls(domain: str, discovered_links: list[str]) -> list[str]:
+    base = f"https://{domain}"
+    urls = []
+    urls.extend(discovered_links)
+    urls.extend(urljoin(base, path) for path in SECONDARY_PATHS)
+
+    result: list[str] = []
+    seen: set[str] = set()
+    for url in urls:
+        parsed = urlparse(str(url))
+        if parsed.scheme not in {"http", "https"}:
+            continue
+        if parsed.netloc and normalize_domain(parsed.netloc) != domain:
+            continue
+        clean = parsed._replace(fragment="").geturl()
+        key = clean.rstrip("/").lower()
+        if key in seen:
+            continue
+        seen.add(key)
+        result.append(clean)
+    return result[:28]
+
+
+def _extract_contact_links(soup: BeautifulSoup, current_url: str) -> list[str]:
+    hints = (
+        "contact",
+        "contacts",
+        "kontakty",
+        "kontakti",
+        "kontakt",
+        "rekvizity",
+        "requisites",
+        "filial",
+        "stores",
+        "где купить",
+        "контакт",
+        "реквизит",
+        "филиал",
+        "магазин",
+    )
+    links: list[str] = []
+    for link in soup.find_all("a", href=True):
+        href = str(link.get("href") or "").strip()
+        if not href or href.startswith(("mailto:", "tel:", "javascript:", "#")):
+            continue
+        label = f"{href} {link.get_text(' ', strip=True)}".lower()
+        if any(hint in label for hint in hints):
+            links.append(urljoin(current_url, href))
+    return _merge_unique([], links, limit=12)
+
+
+def _extract_email_from_links(soup: BeautifulSoup) -> str | None:
+    values: list[str] = []
+    for link in soup.find_all("a", href=True):
+        href = str(link.get("href") or "")
+        if href.lower().startswith("mailto:"):
+            values.append(href.split(":", 1)[1].split("?", 1)[0])
+    return _extract_email(" ".join(values))
+
+
+def _extract_phone_from_links(soup: BeautifulSoup) -> str | None:
+    values: list[str] = []
+    for link in soup.find_all("a", href=True):
+        href = str(link.get("href") or "")
+        if href.lower().startswith("tel:"):
+            values.append(href.split(":", 1)[1])
+    return _extract_phone(" ".join(values))
 
 
 def _analyze_commerce(soup: BeautifulSoup, text: str) -> dict:
