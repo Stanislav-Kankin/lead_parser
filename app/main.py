@@ -335,8 +335,12 @@ async def import_focus_from_dashboard(file: UploadFile = File(...), project_id: 
                 "last_finished_at": format_msk(datetime.utcnow()),
             }
         )
-    redirect_url = f"/web-leads?project_id={project_id}" if project_id else "/web-leads"
-    return RedirectResponse(redirect_url, status_code=303)
+    export_path = export_web_leads_to_xlsx(project_id=project_id or None)
+    return FileResponse(
+        export_path,
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        filename=f"merged_{export_path.name}",
+    )
 
 
 @app.post("/web-leads/{lead_id}/crm")
@@ -560,7 +564,9 @@ def web_leads_dashboard(
     elif result and result.get("focus_import"):
         job_text = (
             f"Фокус импортирован: совпало по ИНН {result.get('matched', 0)}, "
-            f"не найдено в базе {result.get('unmatched', 0)}, строк пропущено {result.get('skipped', 0)}."
+            f"из них ИНН {result.get('matched_by_inn', 0)}, сайт {result.get('matched_by_domain', 0)}, "
+            f"email {result.get('matched_by_email', 0)}, телефон {result.get('matched_by_phone', 0)}. "
+            f"Не найдено в базе {result.get('unmatched', 0)}, строк пропущено {result.get('skipped', 0)}."
         )
     elif result and "deleted" in result:
         job_text = f"Результаты очищены: удалено {result.get('deleted', 0)} компаний."
