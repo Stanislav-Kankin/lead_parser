@@ -4,17 +4,20 @@ from typing import Iterable
 
 from sqlalchemy import case, delete, desc, func, or_, select
 
-from models.lead import Lead
+from models.lead import Lead, LeadProject, SearchProject
 from storage.db import SeenAuthor, SessionLocal
 from utils.domain_normalizer import get_root_domain, normalize_domain
 
 logger = logging.getLogger(__name__)
 
 
-def save_leads(leads: Iterable[dict]) -> dict:
+def save_leads(leads: Iterable[dict], project_id: int | None = None, project_name: str | None = None) -> dict:
     created = 0
     updated = 0
     skipped = 0
+    resolved_project_id = int(project_id or 0) or None
+    if not resolved_project_id and project_name:
+        resolved_project_id = get_or_create_project(project_name).id
 
     with SessionLocal() as session:
         for item in leads:
@@ -34,6 +37,11 @@ def save_leads(leads: Iterable[dict]) -> dict:
                     )
                 )
             ).scalar_one_or_none()
+
+            item_project_id = int(item.get("project_id") or resolved_project_id or 0) or None
+            item_project_name = item.get("project_name") or project_name
+            if not item_project_id and item_project_name:
+                item_project_id = get_or_create_project(item_project_name).id
 
             payload = {
                 "query": item["query"],
@@ -81,10 +89,14 @@ def save_leads(leads: Iterable[dict]) -> dict:
                 for key, value in payload.items():
                     setattr(exists, key, value)
                 updated += 1
+                lead = exists
             else:
                 lead = Lead(**payload)
                 session.add(lead)
+                session.flush()
                 created += 1
+            if item_project_id:
+                _attach_project(session, lead.id, item_project_id)
 
         session.commit()
 
@@ -125,6 +137,64 @@ def get_web_lead(lead_id: int) -> Lead | None:
         return session.get(Lead, lead_id)
 
 
+def get_or_create_project(name: str) -> SearchProject:
+    clean = " ".join(str(name or "").split()).strip()
+    if not clean:
+        clean = "Без проекта"
+    with SessionLocal() as session:
+        existing = session.execute(select(SearchProject).where(SearchProject.name == clean)).scalar_one_or_none()
+        if existing:
+            return _project_snapshot(existing)
+        project = SearchProject(name=clean, updated_at=datetime.utcnow())
+        session.add(project)
+        session.commit()
+        session.refresh(project)
+        return _project_snapshot(project)
+
+
+def get_project(project_id: int | None) -> SearchProject | None:
+    if not project_id:
+        return None
+    with SessionLocal() as session:
+        project = session.get(SearchProject, int(project_id))
+        return _project_snapshot(project) if project else None
+
+
+def list_projects() -> list[dict]:
+    with SessionLocal() as session:
+        projects = session.execute(select(SearchProject).order_by(desc(SearchProject.updated_at), desc(SearchProject.created_at))).scalars().all()
+        result: list[dict] = []
+        for project in projects:
+            count = session.execute(select(func.count(LeadProject.id)).where(LeadProject.project_id == project.id)).scalar_one()
+            result.append(
+                {
+                    "id": project.id,
+                    "name": project.name,
+                    "count": int(count or 0),
+                    "created_at": project.created_at,
+                    "updated_at": project.updated_at,
+                }
+            )
+        return result
+
+
+def get_project_names_for_leads(lead_ids: Iterable[int]) -> dict[int, str]:
+    ids = [int(value) for value in lead_ids if value]
+    if not ids:
+        return {}
+    with SessionLocal() as session:
+        rows = session.execute(
+            select(LeadProject.lead_id, SearchProject.name)
+            .join(SearchProject, SearchProject.id == LeadProject.project_id)
+            .where(LeadProject.lead_id.in_(ids))
+            .order_by(SearchProject.created_at)
+        ).all()
+    result: dict[int, list[str]] = {}
+    for lead_id, name in rows:
+        result.setdefault(int(lead_id), []).append(str(name))
+    return {lead_id: ", ".join(names) for lead_id, names in result.items()}
+
+
 def get_web_leads(
     *,
     limit: int = 50,
@@ -133,6 +203,7 @@ def get_web_leads(
     status: str | None = None,
     min_score: int | None = None,
     query: str | None = None,
+    project_id: int | None = None,
 ) -> list[Lead]:
     with SessionLocal() as session:
         stmt = select(Lead)
@@ -142,6 +213,9 @@ def get_web_leads(
             stmt = stmt.where(Lead.status == status)
         if min_score is not None:
             stmt = stmt.where(Lead.icp_score >= min_score)
+        if project_id:
+            lead_ids = select(LeadProject.lead_id).where(LeadProject.project_id == int(project_id))
+            stmt = stmt.where(Lead.id.in_(lead_ids))
         if query:
             needle = f"%{query.strip()}%"
             stmt = stmt.where(
@@ -170,6 +244,7 @@ def count_web_leads(
     only_icp: bool = False,
     status: str | None = None,
     min_score: int | None = None,
+    project_id: int | None = None,
 ) -> int:
     with SessionLocal() as session:
         stmt = select(func.count(Lead.id))
@@ -179,11 +254,33 @@ def count_web_leads(
             stmt = stmt.where(Lead.status == status)
         if min_score is not None:
             stmt = stmt.where(Lead.icp_score >= min_score)
+        if project_id:
+            lead_ids = select(LeadProject.lead_id).where(LeadProject.project_id == int(project_id))
+            stmt = stmt.where(Lead.id.in_(lead_ids))
         return int(session.execute(stmt).scalar_one() or 0)
+
+
+def list_inns(project_id: int | None = None) -> list[str]:
+    with SessionLocal() as session:
+        stmt = select(Lead.company_inn).where(Lead.company_inn.is_not(None), Lead.company_inn != "")
+        if project_id:
+            lead_ids = select(LeadProject.lead_id).where(LeadProject.project_id == int(project_id))
+            stmt = stmt.where(Lead.id.in_(lead_ids))
+        rows = session.execute(stmt.order_by(Lead.company_inn)).scalars().all()
+    result: list[str] = []
+    seen: set[str] = set()
+    for value in rows:
+        inn = "".join(ch for ch in str(value or "") if ch.isdigit())
+        if inn and inn not in seen:
+            seen.add(inn)
+            result.append(inn)
+    return result
 
 
 def clear_web_leads() -> int:
     with SessionLocal() as session:
+        session.execute(delete(LeadProject))
+        session.execute(delete(SearchProject))
         result = session.execute(delete(Lead))
         session.commit()
         return int(result.rowcount or 0)
@@ -244,3 +341,29 @@ def _contact_confidence(item: dict) -> str:
     if item.get("company_email") or item.get("company_phone"):
         return "low"
     return "low"
+
+
+def _attach_project(session, lead_id: int, project_id: int) -> None:
+    exists = session.execute(
+        select(LeadProject.id).where(
+            LeadProject.lead_id == int(lead_id),
+            LeadProject.project_id == int(project_id),
+        )
+    ).scalar_one_or_none()
+    if exists:
+        return
+    project = session.get(SearchProject, int(project_id))
+    if project:
+        project.updated_at = datetime.utcnow()
+    session.add(LeadProject(lead_id=int(lead_id), project_id=int(project_id)))
+
+
+def _project_snapshot(project: SearchProject | None) -> SearchProject | None:
+    if project is None:
+        return None
+    return SearchProject(
+        id=project.id,
+        name=project.name,
+        created_at=project.created_at,
+        updated_at=project.updated_at,
+    )

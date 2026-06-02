@@ -3,18 +3,31 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import tempfile
 from datetime import datetime
 from html import escape
+from pathlib import Path
 from threading import Lock
 from urllib.parse import parse_qs, urlencode
 
-from fastapi import BackgroundTasks, FastAPI, Request
+from fastapi import BackgroundTasks, FastAPI, File, Request, UploadFile
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, RedirectResponse
 
 from enrichment.domain_analyzer import analyze_domain
+from focus_importer import import_focus_file
 from scoring.icp_classifier import classify_icp
 from storage.db import init_db
-from storage.lead_repository import clear_web_leads, count_web_leads, get_web_lead, get_web_leads, save_leads, update_web_lead
+from storage.lead_repository import (
+    clear_web_leads,
+    count_web_leads,
+    get_or_create_project,
+    get_project,
+    get_web_lead,
+    get_web_leads,
+    list_projects,
+    save_leads,
+    update_web_lead,
+)
 from telegram_signals.exporter import export_signals_to_xlsx
 from telegram_signals.keywords import CHAT_BAD_HINTS, CHAT_DISCOVERY_KEYWORDS, CHAT_GOOD_HINTS, SEGMENT_LABELS
 from telegram_signals.repository import (
@@ -35,7 +48,7 @@ from telegram_signals.repository import (
 from telegram_signals.service import collect_signals
 from utils.time_format import format_msk
 from web_finder import collect_web_icp_leads
-from web_exporter import export_web_leads_to_xlsx
+from web_exporter import export_inns_to_txt, export_web_leads_to_xlsx
 from sources.web_query_templates import load_query_templates, save_query_templates
 
 app = FastAPI(title="AdBeam ICP Finder")
@@ -51,6 +64,8 @@ WEB_JOB = {
     "last_custom_queries": "",
     "last_template_category": "косметика",
     "last_total_limit": 40,
+    "last_project_id": None,
+    "last_project_name": "",
 }
 
 DASHBOARD_JOB = {
@@ -150,6 +165,8 @@ def _run_web_collect_job(
     custom_queries: str | None = None,
     total_limit: int = 40,
     search_category: str | None = None,
+    project_id: int | None = None,
+    project_name: str | None = None,
 ) -> None:
     with JOB_LOCK:
         if WEB_JOB["running"]:
@@ -165,6 +182,8 @@ def _run_web_collect_job(
                 "last_custom_queries": custom_queries or "",
                 "last_template_category": search_category or WEB_JOB.get("last_template_category") or "",
                 "last_total_limit": max(5, min(120, int(total_limit or 40))),
+                "last_project_id": project_id,
+                "last_project_name": project_name or "",
             }
         )
 
@@ -175,6 +194,8 @@ def _run_web_collect_job(
                 custom_queries=custom_queries,
                 total_limit=max(5, min(120, int(total_limit or 40))),
                 search_category=search_category or preset,
+                project_id=project_id,
+                project_name=project_name,
             )
         )
         with JOB_LOCK:
@@ -206,6 +227,12 @@ async def start_web_leads_search(request: Request, background_tasks: BackgroundT
     custom_queries = str(form.get("custom_queries") or "").strip()
     template_category = str(form.get("template_category") or "").strip()
     try:
+        project_id = int(form.get("project_id") or 0) or None
+    except ValueError:
+        project_id = None
+    project = get_project(project_id)
+    project_name = project.name if project else ""
+    try:
         total_limit = max(5, min(120, int(form.get("total_limit") or 40)))
     except ValueError:
         total_limit = 40
@@ -215,6 +242,8 @@ async def start_web_leads_search(request: Request, background_tasks: BackgroundT
         WEB_JOB["last_custom_queries"] = custom_queries
         WEB_JOB["last_template_category"] = template_category or WEB_JOB.get("last_template_category") or "косметика"
         WEB_JOB["last_total_limit"] = total_limit
+        WEB_JOB["last_project_id"] = project_id
+        WEB_JOB["last_project_name"] = project_name
     if not running:
         background_tasks.add_task(
             _run_web_collect_job,
@@ -222,8 +251,21 @@ async def start_web_leads_search(request: Request, background_tasks: BackgroundT
             custom_queries or None,
             total_limit,
             template_category or preset,
+            project_id,
+            project_name,
         )
-    return RedirectResponse("/web-leads", status_code=303)
+    redirect_url = f"/web-leads?project_id={project_id}" if project_id else "/web-leads"
+    return RedirectResponse(redirect_url, status_code=303)
+
+
+@app.post("/web-leads/projects")
+async def create_web_project(request: Request):
+    form = {key: values[-1] for key, values in parse_qs((await request.body()).decode("utf-8")).items()}
+    project = get_or_create_project(str(form.get("project_name") or "Новый проект"))
+    with JOB_LOCK:
+        WEB_JOB["last_project_id"] = project.id
+        WEB_JOB["last_project_name"] = project.name
+    return RedirectResponse(f"/web-leads?project_id={project.id}", status_code=303)
 
 
 @app.get("/web-leads/job-status")
@@ -257,13 +299,44 @@ async def save_web_query_templates_from_dashboard(request: Request):
 
 
 @app.get("/web-leads/export")
-def export_web_leads():
-    file_path = export_web_leads_to_xlsx()
+def export_web_leads(project_id: int = 0):
+    file_path = export_web_leads_to_xlsx(project_id=project_id or None)
     return FileResponse(
         file_path,
         media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
         filename=file_path.name,
     )
+
+
+@app.get("/web-leads/export-inn")
+def export_web_lead_inns(project_id: int = 0):
+    file_path = export_inns_to_txt(project_id=project_id or None)
+    return FileResponse(file_path, media_type="text/plain; charset=utf-8", filename=file_path.name)
+
+
+@app.post("/web-leads/import-focus")
+async def import_focus_from_dashboard(file: UploadFile = File(...), project_id: int = 0):
+    suffix = Path(file.filename or "").suffix or ".xlsx"
+    with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as tmp:
+        tmp.write(await file.read())
+        tmp_path = Path(tmp.name)
+    try:
+        result = import_focus_file(tmp_path)
+    finally:
+        try:
+            tmp_path.unlink()
+        except OSError:
+            pass
+    with JOB_LOCK:
+        WEB_JOB.update(
+            {
+                "last_result": {"focus_import": True, **result},
+                "last_error": None,
+                "last_finished_at": format_msk(datetime.utcnow()),
+            }
+        )
+    redirect_url = f"/web-leads?project_id={project_id}" if project_id else "/web-leads"
+    return RedirectResponse(redirect_url, status_code=303)
 
 
 @app.post("/web-leads/{lead_id}/crm")
@@ -338,6 +411,7 @@ def web_leads_dashboard(
     status: str = "",
     min_score: int = 0,
     q: str = "",
+    project_id: int = 0,
     page: int = 1,
     per_page: int = 40,
 ):
@@ -350,10 +424,15 @@ def web_leads_dashboard(
         status=status or None,
         min_score=min_score or None,
         query=q or None,
+        project_id=project_id or None,
     )
 
     with JOB_LOCK:
         web_job = dict(WEB_JOB)
+    projects = list_projects()
+    selected_project_id = int(project_id or 0)
+    selected_project = get_project(selected_project_id) if selected_project_id else None
+    search_project_id = selected_project_id or int(web_job.get("last_project_id") or 0)
     selected_preset = str(web_job.get("last_preset") or "all")
     form_custom_queries = str(web_job.get("last_custom_queries") or "")
     template_category = str(web_job.get("last_template_category") or "косметика")
@@ -375,6 +454,18 @@ def web_leads_dashboard(
 
     def badge(text: str, tone: str = "") -> str:
         return f"<span class='badge {tone}'>{escape(text)}</span>"
+
+    def project_options(current_id: int, include_all: bool = False, all_label: str = "Общий пул") -> str:
+        options = []
+        if include_all:
+            options.append(f"<option value='0' {_selected(str(current_id), '0')}>{escape(all_label)}</option>")
+        else:
+            options.append(f"<option value='' {_selected(str(current_id), '0')}>Без проекта</option>")
+        for project in projects:
+            value = str(project["id"])
+            label = f'{project["name"]} ({project["count"]})'
+            options.append(f"<option value='{escape(value)}' {_selected(str(current_id), value)}>{escape(label)}</option>")
+        return "".join(options)
 
     def lead_card(item) -> str:
         site = f"https://{escape(item.domain_normalized or item.domain)}"
@@ -466,6 +557,11 @@ def web_leads_dashboard(
         job_text = "Идет web-поиск и анализ сайтов..."
     elif web_job.get("last_error"):
         job_text = f"Ошибка: {web_job['last_error']}"
+    elif result and result.get("focus_import"):
+        job_text = (
+            f"Фокус импортирован: совпало по ИНН {result.get('matched', 0)}, "
+            f"не найдено в базе {result.get('unmatched', 0)}, строк пропущено {result.get('skipped', 0)}."
+        )
     elif result and "deleted" in result:
         job_text = f"Результаты очищены: удалено {result.get('deleted', 0)} компаний."
     elif result:
@@ -476,7 +572,7 @@ def web_leads_dashboard(
     else:
         job_text = "Web-поиск еще не запускался."
 
-    query_params = {"status": status, "min_score": min_score, "q": q, "per_page": per_page}
+    query_params = {"status": status, "min_score": min_score, "q": q, "project_id": selected_project_id, "per_page": per_page}
     prev_params = {**query_params, "page": max(1, page - 1)}
     next_params = {**query_params, "page": page + 1}
 
@@ -508,7 +604,9 @@ def web_leads_dashboard(
         .metric b {{ display:block; font-size:24px; }}
         .metric span {{ color:var(--muted); }}
         .search-panel {{ background:#fff; border:1px solid var(--line); border-radius:8px; padding:12px; margin-bottom:12px; }}
-        .search-form {{ display:grid; grid-template-columns:180px 1fr 96px 132px; gap:10px; align-items:end; }}
+        .project-panel {{ display:grid; grid-template-columns:1fr 220px 150px; gap:10px; align-items:end; margin-bottom:12px; padding-bottom:12px; border-bottom:1px solid var(--line); }}
+        .project-caption {{ color:var(--muted); }}
+        .search-form {{ display:grid; grid-template-columns:190px 180px 1fr 96px 132px; gap:10px; align-items:end; }}
         .search-actions {{ display:flex; flex-wrap:wrap; gap:8px; margin-top:10px; }}
         .inline-form {{ margin:0; }}
         .template-panel {{ border-top:1px solid var(--line); margin-top:12px; padding-top:12px; }}
@@ -522,7 +620,7 @@ def web_leads_dashboard(
         textarea {{ min-height:70px; resize:vertical; }}
         .danger-btn {{ min-height:36px; border-radius:7px; padding:0 12px; border:1px solid #fecaca; color:var(--red); background:#fff7f7; cursor:pointer; font:inherit; }}
         .job {{ margin-top:8px; color:var(--green); }}
-        .filters {{ display:grid; grid-template-columns:120px 120px 1fr 110px; gap:8px; align-items:end; margin:12px 0; }}
+        .filters {{ display:grid; grid-template-columns:190px 120px 120px 1fr 110px; gap:8px; align-items:end; margin:12px 0; }}
         .pager {{ display:flex; justify-content:space-between; align-items:center; color:var(--muted); margin:10px 0; }}
         .pager-actions {{ display:flex; gap:8px; }}
         .lead-card {{ display:grid; grid-template-columns:minmax(0,1fr) 260px; gap:14px; background:#fff; border:1px solid var(--line); border-radius:8px; padding:14px; margin-bottom:12px; }}
@@ -559,7 +657,7 @@ def web_leads_dashboard(
         .modal-stat b {{ display:block; font-size:24px; }}
         .modal-stat span {{ color:var(--muted); }}
         .modal-foot {{ display:flex; justify-content:flex-end; gap:8px; border-top:1px solid var(--line); padding:12px 18px; background:#f8fafc; }}
-        @media (max-width:980px) {{ .topbar, .lead-card {{ display:block; }} .nav {{ justify-content:flex-start; margin-top:12px; }} .metrics, .columns, .search-form, .filters, .template-controls, .template-editor {{ grid-template-columns:1fr; }} .lead-side {{ border-left:0; border-top:1px solid var(--line); padding:12px 0 0; margin-top:12px; }} }}
+        @media (max-width:980px) {{ .topbar, .lead-card {{ display:block; }} .nav {{ justify-content:flex-start; margin-top:12px; }} .metrics, .columns, .project-panel, .search-form, .filters, .template-controls, .template-editor {{ grid-template-columns:1fr; }} .lead-side {{ border-left:0; border-top:1px solid var(--line); padding:12px 0 0; margin-top:12px; }} }}
       </style>
     </head>
     <body>
@@ -577,14 +675,27 @@ def web_leads_dashboard(
         </div>
 
         <section class="metrics">
-          {metric("всего компаний", count_web_leads())}
-          {metric("ICP score 70+", count_web_leads(min_score=70))}
-          {metric("ICP score 45+", count_web_leads(min_score=45))}
-          {metric("готовы к контакту", count_web_leads(only_icp=True, status="new"))}
+          {metric("компаний в срезе", count_web_leads(project_id=selected_project_id or None))}
+          {metric("ICP score 70+", count_web_leads(min_score=70, project_id=selected_project_id or None))}
+          {metric("ICP score 45+", count_web_leads(min_score=45, project_id=selected_project_id or None))}
+          {metric("готовы к контакту", count_web_leads(only_icp=True, status="new", project_id=selected_project_id or None))}
         </section>
 
         <section class="search-panel">
+          <div class="project-panel">
+            <div>
+              <b>{escape("Общий пул" if not selected_project_id else (selected_project.name if selected_project else "Проект"))}</b>
+              <div class="project-caption">Проект группирует поиски. Общий пул показывает всю базу без вкладок.</div>
+            </div>
+            <form id="new-project-form" method="post" action="/web-leads/projects" class="inline-form">
+              <label>Новый проект <input name="project_name" placeholder="Проект А"></label>
+            </form>
+            <button class="primary-btn" type="submit" form="new-project-form">Начать новый проект</button>
+          </div>
           <form id="web-search-form" method="post" action="/web-leads/search" class="search-form">
+            <label>Проект
+              <select name="project_id">{project_options(search_project_id, include_all=False)}</select>
+            </label>
             <label>Сегмент
               <select name="preset">
                 <option value="all" {_selected(selected_preset, "all")}>Все ICP1</option>
@@ -624,7 +735,14 @@ def web_leads_dashboard(
             </details>
           </div>
           <div class="search-actions">
-            <a class="link-btn" href="/web-leads/export">Excel</a>
+            <a class="link-btn" href="/web-leads/export?project_id={selected_project_id}">Excel: текущий срез</a>
+            <a class="link-btn" href="/web-leads/export">Excel: общий пул</a>
+            <a class="link-btn" href="/web-leads/export-inn?project_id={selected_project_id}">ИНН: текущий срез</a>
+            <a class="link-btn" href="/web-leads/export-inn">ИНН: общий пул</a>
+            <form method="post" action="/web-leads/import-focus?project_id={selected_project_id}" enctype="multipart/form-data" class="inline-form">
+              <label>Фокус/Компас Excel <input type="file" name="file" accept=".xlsx,.xlsm,.csv"></label>
+              <button class="link-btn" type="submit">Объединить</button>
+            </form>
             <form method="post" action="/web-leads/clear" class="inline-form" onsubmit="return confirm('Очистить все web-результаты?')">
               <button class="danger-btn" type="submit">Очистить результаты</button>
             </form>
@@ -633,6 +751,9 @@ def web_leads_dashboard(
         </section>
 
         <form method="get" action="/web-leads" class="filters">
+          <label>Проект <select name="project_id">
+            {project_options(selected_project_id, include_all=True)}
+          </select></label>
           <label>Score от <input type="number" name="min_score" value="{int(min_score or 0)}" min="0" max="100"></label>
           <label>Статус <select name="status">
             <option value="">Все</option>
@@ -662,7 +783,7 @@ def web_leads_dashboard(
           </div>
           <div class="modal-stats" id="job-modal-stats"></div>
           <div class="modal-foot">
-            <a class="link-btn" href="/web-leads/export">Excel</a>
+            <a class="link-btn" href="/web-leads/export?project_id={selected_project_id}">Excel</a>
             <button class="primary-btn" type="button" id="job-modal-refresh">Показать результаты</button>
           </div>
         </section>

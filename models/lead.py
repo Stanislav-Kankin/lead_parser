@@ -1,6 +1,6 @@
 from datetime import datetime
 
-from sqlalchemy import Boolean, Column, DateTime, Integer, String, Text
+from sqlalchemy import Boolean, Column, DateTime, Integer, String, Text, UniqueConstraint
 from sqlalchemy.orm import declarative_base
 
 Base = declarative_base()
@@ -37,6 +37,14 @@ class Lead(Base):
     legal_form = Column(String, nullable=True)
     inn_source = Column(String, nullable=True)
 
+    focus_loaded_at = Column(DateTime, nullable=True)
+    focus_status = Column(String, nullable=True)
+    focus_region = Column(String, nullable=True)
+    focus_revenue = Column(String, nullable=True)
+    focus_employees = Column(String, nullable=True)
+    focus_okved = Column(String, nullable=True)
+    focus_director = Column(String, nullable=True)
+
     company_email = Column(String, nullable=True)
     company_phone = Column(String, nullable=True)
     employees = Column(String, nullable=True)
@@ -57,3 +65,22 @@ class Lead(Base):
     created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
     updated_at = Column(DateTime, default=datetime.utcnow, nullable=False)
     last_enriched_at = Column(DateTime, nullable=True)
+
+
+class SearchProject(Base):
+    __tablename__ = "search_projects"
+
+    id = Column(Integer, primary_key=True)
+    name = Column(String, nullable=False, unique=True)
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+    updated_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+
+
+class LeadProject(Base):
+    __tablename__ = "lead_projects"
+    __table_args__ = (UniqueConstraint("lead_id", "project_id", name="uq_lead_project"),)
+
+    id = Column(Integer, primary_key=True)
+    lead_id = Column(Integer, nullable=False, index=True)
+    project_id = Column(Integer, nullable=False, index=True)
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
