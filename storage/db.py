@@ -123,6 +123,7 @@ REQUIRED_COLUMNS = {
     "domain_normalized": "ALTER TABLE leads ADD COLUMN domain_normalized VARCHAR",
     "root_domain": "ALTER TABLE leads ADD COLUMN root_domain VARCHAR",
     "source_url": "ALTER TABLE leads ADD COLUMN source_url VARCHAR",
+    "search_category": "ALTER TABLE leads ADD COLUMN search_category VARCHAR",
     "icp_score": "ALTER TABLE leads ADD COLUMN icp_score INTEGER DEFAULT 0",
     "evidence": "ALTER TABLE leads ADD COLUMN evidence TEXT",
     "outreach_angle": "ALTER TABLE leads ADD COLUMN outreach_angle TEXT",
@@ -148,6 +149,7 @@ def _ensure_columns():
         conn.execute(text("UPDATE leads SET status = COALESCE(status, 'new')"))
         conn.execute(text("UPDATE leads SET domain_normalized = COALESCE(domain_normalized, domain)"))
         conn.execute(text("UPDATE leads SET root_domain = COALESCE(root_domain, domain)"))
+        conn.execute(text("UPDATE leads SET search_category = COALESCE(search_category, lead_type, 'без категории')"))
         conn.execute(text("UPDATE leads SET has_contacts = CASE WHEN company_email IS NOT NULL OR company_phone IS NOT NULL THEN 1 ELSE COALESCE(has_contacts, 0) END"))
         conn.execute(text("UPDATE leads SET has_catalog = COALESCE(has_catalog, 0)"))
         conn.execute(text("UPDATE leads SET has_cart = COALESCE(has_cart, 0)"))

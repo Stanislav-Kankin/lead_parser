@@ -43,6 +43,7 @@ def save_leads(leads: Iterable[dict]) -> dict:
                 "root_domain": root_domain,
                 "source": item.get("source", "ddgs"),
                 "source_url": item.get("source_url") or item.get("url"),
+                "search_category": item.get("search_category") or item.get("category"),
                 "is_icp": item.get("is_icp", False),
                 "icp_score": int(item.get("icp_score") or item.get("score") or 0),
                 "icp_reason": item.get("icp_reason"),
@@ -147,6 +148,7 @@ def get_web_leads(
                 or_(
                     Lead.company_name.ilike(needle),
                     Lead.domain.ilike(needle),
+                    Lead.search_category.ilike(needle),
                     Lead.title.ilike(needle),
                     Lead.icp_reason.ilike(needle),
                     Lead.evidence.ilike(needle),

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import logging
 import re
 import time
@@ -11,6 +12,9 @@ from bs4 import BeautifulSoup
 from utils.domain_normalizer import normalize_domain
 
 logger = logging.getLogger(__name__)
+
+MAX_FOLLOWUP_PAGES = 16
+FOLLOWUP_BATCH_SIZE = 4
 
 EMAIL_RE = re.compile(r"[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}", re.IGNORECASE)
 PHONE_RE = re.compile(r"(?:\+?7|8)[\s\-()]*\d[\d\s\-()]{8,}")
@@ -149,7 +153,7 @@ async def analyze_domain(domain: str) -> dict:
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
         "(KHTML, like Gecko) Chrome/123.0 Safari/537.36"
     }
-    timeout = httpx.Timeout(6.0, connect=3.0)
+    timeout = httpx.Timeout(5.0, connect=2.5)
     result = _empty_result()
 
     async with httpx.AsyncClient(headers=headers, timeout=timeout, follow_redirects=True, verify=False) as client:
@@ -160,12 +164,7 @@ async def analyze_domain(domain: str) -> dict:
             result = _merge_result(result, homepage)
 
         contact_urls = _build_followup_urls(normalized, result.get("contact_links") or [])
-        for url in contact_urls:
-            if _has_enough_company_data(result):
-                break
-            page = await _fetch_page(client, url)
-            if page:
-                result = _merge_result(result, page)
+        result = await _fetch_followup_pages(client, result, contact_urls)
 
     elapsed = time.perf_counter() - started
     logger.info(
@@ -176,6 +175,19 @@ async def analyze_domain(domain: str) -> dict:
         bool(result.get("company_inn")),
         elapsed,
     )
+    return result
+
+
+async def _fetch_followup_pages(client: httpx.AsyncClient, result: dict, urls: list[str]) -> dict:
+    targets = urls[:MAX_FOLLOWUP_PAGES]
+    for index in range(0, len(targets), FOLLOWUP_BATCH_SIZE):
+        if _has_enough_company_data(result):
+            break
+        batch = targets[index : index + FOLLOWUP_BATCH_SIZE]
+        pages = await asyncio.gather(*(_fetch_page(client, url) for url in batch), return_exceptions=True)
+        for page in pages:
+            if isinstance(page, dict):
+                result = _merge_result(result, page)
     return result
 
 
@@ -320,7 +332,7 @@ def _build_followup_urls(domain: str, discovered_links: list[str]) -> list[str]:
             continue
         seen.add(key)
         result.append(clean)
-    return result[:50]
+    return result[:MAX_FOLLOWUP_PAGES]
 
 
 def _extract_contact_links(soup: BeautifulSoup, current_url: str) -> list[str]:

@@ -18,7 +18,8 @@ async def collect_web_icp_leads(
     custom_queries: str | None = None,
     total_limit: int = 40,
     per_query_limit: int = 8,
-    concurrency: int = 5,
+    concurrency: int = 8,
+    search_category: str | None = None,
 ) -> dict:
     queries = build_queries(custom_queries, preset=preset)
     candidates = await search_domains_multi(
@@ -58,6 +59,7 @@ async def collect_web_icp_leads(
 
             return {
                 "query": candidate.get("source_query") or (queries[0] if queries else preset),
+                "search_category": search_category or preset,
                 "company_name": candidate.get("company_name"),
                 "domain": domain,
                 "source": candidate.get("source", "ddgs"),

@@ -17,6 +17,7 @@ class Lead(Base):
     root_domain = Column(String, nullable=True)
     source = Column(String, nullable=False, default="ddgs")
     source_url = Column(String, nullable=True)
+    search_category = Column(String, nullable=True)
 
     is_icp = Column(Boolean, nullable=False, default=False)
     icp_score = Column(Integer, nullable=False, default=0)

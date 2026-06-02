@@ -145,7 +145,12 @@ def root():
     return RedirectResponse("/web-leads", status_code=302)
 
 
-def _run_web_collect_job(preset: str = "all", custom_queries: str | None = None, total_limit: int = 40) -> None:
+def _run_web_collect_job(
+    preset: str = "all",
+    custom_queries: str | None = None,
+    total_limit: int = 40,
+    search_category: str | None = None,
+) -> None:
     with JOB_LOCK:
         if WEB_JOB["running"]:
             return
@@ -158,6 +163,7 @@ def _run_web_collect_job(preset: str = "all", custom_queries: str | None = None,
                 "last_result": None,
                 "last_preset": preset,
                 "last_custom_queries": custom_queries or "",
+                "last_template_category": search_category or WEB_JOB.get("last_template_category") or "",
                 "last_total_limit": max(5, min(120, int(total_limit or 40))),
             }
         )
@@ -168,6 +174,7 @@ def _run_web_collect_job(preset: str = "all", custom_queries: str | None = None,
                 preset=preset,
                 custom_queries=custom_queries,
                 total_limit=max(5, min(120, int(total_limit or 40))),
+                search_category=search_category or preset,
             )
         )
         with JOB_LOCK:
@@ -209,7 +216,13 @@ async def start_web_leads_search(request: Request, background_tasks: BackgroundT
         WEB_JOB["last_template_category"] = template_category or WEB_JOB.get("last_template_category") or "косметика"
         WEB_JOB["last_total_limit"] = total_limit
     if not running:
-        background_tasks.add_task(_run_web_collect_job, preset, custom_queries or None, total_limit)
+        background_tasks.add_task(
+            _run_web_collect_job,
+            preset,
+            custom_queries or None,
+            total_limit,
+            template_category or preset,
+        )
     return RedirectResponse("/web-leads", status_code=303)
 
 
@@ -295,6 +308,7 @@ def refresh_web_lead_from_dashboard(lead_id: int, request: Request):
                 "domain": item.domain,
                 "source": item.source or "refresh",
                 "source_url": item.source_url,
+                "search_category": item.search_category,
                 "title": site.get("title") or item.title or item.company_name,
                 "company_email": site.get("email"),
                 "company_phone": site.get("phone"),
@@ -394,6 +408,7 @@ def web_leads_dashboard(
             </div>
             <div class="badges">
               {badge("ICP" if item.is_icp else "проверить", "ok" if item.is_icp else "")}
+              {badge(item.search_category or "без категории")}
               {badge(item.lead_type or "unknown")}
               {badge(item.priority or "low")}
               {badge(item.cjm_stage or "signal_only")}

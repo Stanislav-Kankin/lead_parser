@@ -66,7 +66,7 @@ def export_web_leads_to_xlsx() -> Path:
     for item in items:
         ws.append(
             [
-                item.lead_type or item.priority or "",
+                item.search_category or item.lead_type or item.priority or "",
                 item.title or item.company_name or item.domain or "",
                 _site_url(item),
                 item.company_phone or "",
