@@ -370,6 +370,8 @@ def web_leads_dashboard(
             contacts.append(f"<a href='mailto:{escape(item.company_email)}'>{escape(item.company_email)}</a>")
         if item.company_phone:
             contacts.append(escape(item.company_phone))
+        if item.company_inn:
+            contacts.append(f"ИНН: {escape(item.company_inn)}")
         if not contacts:
             contacts.append("контакты не найдены")
         evidence = escape(item.evidence or item.icp_reason or "нет доказательств").replace("\n", "<br>")

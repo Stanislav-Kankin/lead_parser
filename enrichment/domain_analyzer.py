@@ -18,6 +18,11 @@ INN_RE = re.compile(r"(?:инн|inn)\s*[:№#]?\s*(\d{10}|\d{12})", re.IGNORECAS
 OGRN_RE = re.compile(r"(?:огрн|ogrn)\s*[:№#]?\s*(\d{13}|\d{15})", re.IGNORECASE)
 LEGAL_NAME_RE = re.compile(r"\b((?:ООО|АО|ПАО|ЗАО|ИП)\s*[«\"]?[^\n\r\t<>]{2,120})", re.IGNORECASE)
 
+INN_RE = re.compile(r"(?:и\s*н\s*н|инн|inn)\s*(?:/(?:кпп|kpp))?\s*[:№#-]?\s*((?:\d[\s-]*){10,12})", re.IGNORECASE)
+OGRN_RE = re.compile(r"(?:о\s*г\s*р\s*н|огрн|ogrn)\s*[:№#-]?\s*((?:\d[\s-]*){13,15})", re.IGNORECASE)
+LEGAL_NAME_RE = re.compile(r"\b((?:ООО|АО|ПАО|ЗАО|ИП)\s*[«\"“]?[^\n\r\t<>]{2,140})", re.IGNORECASE)
+ANY_INN_RE = re.compile(r"\b(?:\d[\s-]*){10}(?:\d[\s-]*){0,2}\b")
+
 BAD_EMAIL_PARTS = {"example.com", "email.com", "noreply", "no-reply", "sentry", "test@", "rating@", "info@example"}
 BAD_PHONE_VALUES = {"0000000000", "1111111111", "1234567890", "1010101010", "8000000000"}
 SECONDARY_PATHS = [
@@ -41,11 +46,41 @@ SECONDARY_PATHS = [
     "/support",
     "/rekvizity",
     "/rekvizity/",
+    "/requisites",
+    "/requisites/",
+    "/rekviziti",
+    "/rekvizity-kompanii",
+    "/rekvizity-organizatsii",
+    "/about/rekvizity",
+    "/about/requisites",
     "/about/contacts",
     "/about/kontakty",
     "/company/contacts",
     "/company/kontakty",
     "/company/rekvizity",
+    "/company/requisites",
+    "/contacts/rekvizity",
+    "/contacts/requisites",
+    "/info/rekvizity",
+    "/info/requisites",
+    "/legal",
+    "/legal/",
+    "/legal-information",
+    "/pravovaya-informatsiya",
+    "/yuridicheskaya-informatsiya",
+    "/documents",
+    "/docs",
+    "/oferta",
+    "/oferta/",
+    "/publichnaya-oferta",
+    "/dogovor-oferty",
+    "/privacy",
+    "/privacy-policy",
+    "/politika-konfidentsialnosti",
+    "/personal-data",
+    "/soglasie-na-obrabotku-personalnyh-dannyh",
+    "/terms",
+    "/agreement",
     "/about",
     "/company",
     "/o-kompanii",
@@ -126,7 +161,7 @@ async def analyze_domain(domain: str) -> dict:
 
         contact_urls = _build_followup_urls(normalized, result.get("contact_links") or [])
         for url in contact_urls:
-            if _has_enough_contacts(result):
+            if _has_enough_company_data(result):
                 break
             page = await _fetch_page(client, url)
             if page:
@@ -179,8 +214,8 @@ async def _fetch_page(client: httpx.AsyncClient, url: str) -> dict | None:
 
     email = attr_email or _extract_email(text)
     phone = attr_phone or _extract_phone(text)
-    inn = _extract_first(INN_RE, text)
-    ogrn = _extract_first(OGRN_RE, text)
+    inn = _extract_inn(text)
+    ogrn = _extract_digits_first(OGRN_RE, text, {13, 15})
     legal_name = _extract_legal_name(text)
     legal_form = _extract_legal_form(legal_name)
 
@@ -231,11 +266,15 @@ def _has_enough_contacts(result: dict) -> bool:
     return bool(result.get("email") and result.get("phone"))
 
 
+def _has_enough_company_data(result: dict) -> bool:
+    return bool(result.get("email") and result.get("phone") and result.get("company_inn"))
+
+
 def _merge_result(base: dict, page: dict) -> dict:
     for key in ["title", "description", "h1", "email", "phone", "company_inn", "company_ogrn", "company_legal_name", "legal_form", "inn_source"]:
         if not base.get(key) and page.get(key):
             base[key] = page[key]
-    base["contact_links"] = _merge_unique(base.get("contact_links") or [], page.get("contact_links") or [], limit=12)
+    base["contact_links"] = _merge_unique(base.get("contact_links") or [], page.get("contact_links") or [], limit=24)
     for key in ["has_catalog", "has_cart"]:
         base[key] = bool(base.get(key) or page.get(key))
     if int(page.get("ecommerce_score") or 0) > int(base.get("ecommerce_score") or 0):
@@ -281,7 +320,7 @@ def _build_followup_urls(domain: str, discovered_links: list[str]) -> list[str]:
             continue
         seen.add(key)
         result.append(clean)
-    return result[:28]
+    return result[:50]
 
 
 def _extract_contact_links(soup: BeautifulSoup, current_url: str) -> list[str]:
@@ -304,6 +343,22 @@ def _extract_contact_links(soup: BeautifulSoup, current_url: str) -> list[str]:
         "обратная связь",
         "служба поддержки",
         "поддержка",
+        "юридическая информация",
+        "правовая информация",
+        "официальная информация",
+        "документы",
+        "оферта",
+        "договор",
+        "политика конфиденциальности",
+        "персональные данные",
+        "пользовательское соглашение",
+        "legal",
+        "privacy",
+        "terms",
+        "agreement",
+        "documents",
+        "docs",
+        "oferta",
     )
     links: list[str] = []
     for link in soup.find_all("a", href=True):
@@ -313,7 +368,7 @@ def _extract_contact_links(soup: BeautifulSoup, current_url: str) -> list[str]:
         label = f"{href} {link.get_text(' ', strip=True)}".lower()
         if any(hint in label for hint in hints):
             links.append(urljoin(current_url, href))
-    return _merge_unique([], links, limit=12)
+    return _merge_unique([], links, limit=24)
 
 
 def _extract_email_from_links(soup: BeautifulSoup) -> str | None:
@@ -419,6 +474,60 @@ def _extract_first(pattern: re.Pattern, text: str | None) -> str | None:
     return value or None
 
 
+def _extract_digits_first(pattern: re.Pattern, text: str | None, allowed_lengths: set[int]) -> str | None:
+    if not text:
+        return None
+    match = pattern.search(text)
+    if not match:
+        return None
+    digits = _digits(match.group(1))
+    if len(digits) in allowed_lengths:
+        return digits
+    return None
+
+
+def _extract_inn(text: str | None) -> str | None:
+    if not text:
+        return None
+
+    for match in INN_RE.finditer(text):
+        digits = _digits(match.group(1))
+        if _is_valid_inn(digits):
+            return digits
+
+    lowered = text.lower()
+    context_hints = ("инн", "кпп", "огрн", "реквиз", "юрид", "юр.", "налог", "ооо", "ип ", "предприят")
+    for match in ANY_INN_RE.finditer(text):
+        digits = _digits(match.group(0))
+        if not _is_valid_inn(digits):
+            continue
+        start = max(0, match.start() - 90)
+        end = min(len(lowered), match.end() + 90)
+        context = lowered[start:end]
+        if any(hint in context for hint in context_hints):
+            return digits
+    return None
+
+
+def _digits(value: str | None) -> str:
+    return re.sub(r"\D", "", value or "")
+
+
+def _is_valid_inn(value: str | None) -> bool:
+    digits = _digits(value)
+    if len(digits) == 10:
+        weights = [2, 4, 10, 3, 5, 9, 4, 6, 8]
+        checksum = sum(int(digit) * weight for digit, weight in zip(digits[:9], weights)) % 11 % 10
+        return checksum == int(digits[9])
+    if len(digits) == 12:
+        weights_11 = [7, 2, 4, 10, 3, 5, 9, 4, 6, 8]
+        weights_12 = [3, 7, 2, 4, 10, 3, 5, 9, 4, 6, 8]
+        checksum_11 = sum(int(digit) * weight for digit, weight in zip(digits[:10], weights_11)) % 11 % 10
+        checksum_12 = sum(int(digit) * weight for digit, weight in zip(digits[:11], weights_12)) % 11 % 10
+        return checksum_11 == int(digits[10]) and checksum_12 == int(digits[11])
+    return False
+
+
 def _extract_legal_name(text: str | None) -> str | None:
     if not text:
         return None
@@ -426,7 +535,17 @@ def _extract_legal_name(text: str | None) -> str | None:
         value = re.sub(r"\s+", " ", match.group(1)).strip(" .,-;:")
         if len(value) < 4:
             continue
-        if any(bad in value.lower() for bad in ["политик", "конфиденц", "пользоват", "согласие"]):
+        if any(bad in value.lower() for bad in [
+            "политик",
+            "конфиденц",
+            "пользоват",
+            "согласие",
+            "сбербанк",
+            "банк ",
+            " к/с",
+            " бик",
+            "корреспондент",
+        ]):
             continue
         return value[:120]
     return None
