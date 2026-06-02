@@ -11,7 +11,7 @@ from fastapi import BackgroundTasks, FastAPI, Request
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, RedirectResponse
 
 from storage.db import init_db
-from storage.lead_repository import count_web_leads, get_web_leads, update_web_lead
+from storage.lead_repository import clear_web_leads, count_web_leads, get_web_leads, update_web_lead
 from telegram_signals.exporter import export_signals_to_xlsx
 from telegram_signals.keywords import CHAT_BAD_HINTS, CHAT_DISCOVERY_KEYWORDS, CHAT_GOOD_HINTS, SEGMENT_LABELS
 from telegram_signals.repository import (
@@ -32,6 +32,7 @@ from telegram_signals.repository import (
 from telegram_signals.service import collect_signals
 from utils.time_format import format_msk
 from web_finder import collect_web_icp_leads
+from web_exporter import export_web_leads_to_xlsx
 
 app = FastAPI(title="AdBeam ICP Finder")
 logger = logging.getLogger(__name__)
@@ -42,6 +43,9 @@ WEB_JOB = {
     "last_finished_at": None,
     "last_error": None,
     "last_result": None,
+    "last_preset": "all",
+    "last_custom_queries": "",
+    "last_total_limit": 40,
 }
 
 DASHBOARD_JOB = {
@@ -147,6 +151,9 @@ def _run_web_collect_job(preset: str = "all", custom_queries: str | None = None,
                 "last_finished_at": None,
                 "last_error": None,
                 "last_result": None,
+                "last_preset": preset,
+                "last_custom_queries": custom_queries or "",
+                "last_total_limit": max(5, min(120, int(total_limit or 40))),
             }
         )
 
@@ -185,9 +192,15 @@ async def start_web_leads_search(request: Request, background_tasks: BackgroundT
     form = {key: values[-1] for key, values in parse_qs((await request.body()).decode("utf-8")).items()}
     preset = str(form.get("preset") or "all")
     custom_queries = str(form.get("custom_queries") or "").strip()
-    total_limit = int(form.get("total_limit") or 40)
+    try:
+        total_limit = max(5, min(120, int(form.get("total_limit") or 40)))
+    except ValueError:
+        total_limit = 40
     with JOB_LOCK:
         running = bool(WEB_JOB["running"])
+        WEB_JOB["last_preset"] = preset
+        WEB_JOB["last_custom_queries"] = custom_queries
+        WEB_JOB["last_total_limit"] = total_limit
     if not running:
         background_tasks.add_task(_run_web_collect_job, preset, custom_queries or None, total_limit)
     return RedirectResponse("/web-leads", status_code=303)
@@ -197,6 +210,30 @@ async def start_web_leads_search(request: Request, background_tasks: BackgroundT
 def web_leads_job_status():
     with JOB_LOCK:
         return JSONResponse(dict(WEB_JOB))
+
+
+@app.post("/web-leads/clear")
+def clear_web_leads_from_dashboard():
+    deleted = clear_web_leads()
+    with JOB_LOCK:
+        WEB_JOB.update(
+            {
+                "last_result": {"created": 0, "updated": 0, "analyzed": 0, "deleted": deleted},
+                "last_error": None,
+                "last_finished_at": format_msk(datetime.utcnow()),
+            }
+        )
+    return RedirectResponse("/web-leads", status_code=303)
+
+
+@app.get("/web-leads/export")
+def export_web_leads():
+    file_path = export_web_leads_to_xlsx()
+    return FileResponse(
+        file_path,
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        filename=file_path.name,
+    )
 
 
 @app.post("/web-leads/{lead_id}/crm")
@@ -233,6 +270,12 @@ def web_leads_dashboard(
 
     with JOB_LOCK:
         web_job = dict(WEB_JOB)
+    selected_preset = str(web_job.get("last_preset") or "all")
+    form_custom_queries = str(web_job.get("last_custom_queries") or "")
+    try:
+        form_total_limit = max(5, min(120, int(web_job.get("last_total_limit") or 40)))
+    except ValueError:
+        form_total_limit = 40
 
     def nav_button(label: str, href: str, active: bool = False) -> str:
         cls = "nav-pill active" if active else "nav-pill"
@@ -255,6 +298,7 @@ def web_leads_dashboard(
         if not contacts:
             contacts.append("контакты не найдены")
         evidence = escape(item.evidence or item.icp_reason or "нет доказательств").replace("\n", "<br>")
+        site_assessment = escape(item.site_assessment or "оценка сайта не проводилась")
         opener = escape(item.opener or "")
         hypothesis = escape(item.hypothesis or "")
         angle = escape(item.outreach_angle or "")
@@ -277,6 +321,12 @@ def web_leads_dashboard(
               {badge(item.priority or "low")}
               {badge(item.cjm_stage or "signal_only")}
               {badge("контакты есть", "ok") if item.has_contacts else badge("нет контактов")}
+              {badge("каталог", "ok") if item.has_catalog else badge("без каталога")}
+              {badge("корзина", "ok") if item.has_cart else badge("без корзины")}
+            </div>
+            <div class="site-check">
+              <b>Сайт: {escape(item.site_type or "unknown")} · ecom {int(item.ecommerce_score or 0)}</b>
+              <span>{site_assessment}</span>
             </div>
             <div class="columns">
               <section>
@@ -321,6 +371,8 @@ def web_leads_dashboard(
         job_text = "Идет web-поиск и анализ сайтов..."
     elif web_job.get("last_error"):
         job_text = f"Ошибка: {web_job['last_error']}"
+    elif result and "deleted" in result:
+        job_text = f"Результаты очищены: удалено {result.get('deleted', 0)} компаний."
     elif result:
         job_text = (
             f"Последний сбор: {result.get('created', 0)} новых, {result.get('updated', 0)} обновлено, "
@@ -362,10 +414,13 @@ def web_leads_dashboard(
         .metric span {{ color:var(--muted); }}
         .search-panel {{ background:#fff; border:1px solid var(--line); border-radius:8px; padding:12px; margin-bottom:12px; }}
         .search-form {{ display:grid; grid-template-columns:180px 1fr 96px 132px; gap:10px; align-items:end; }}
+        .search-actions {{ display:flex; flex-wrap:wrap; gap:8px; margin-top:10px; }}
+        .inline-form {{ margin:0; }}
         label {{ display:grid; gap:5px; color:var(--muted); font-size:12px; }}
         input, select, textarea {{ width:100%; border:1px solid #cbd5e1; border-radius:7px; padding:8px 10px; font:inherit; color:var(--text); background:#fff; }}
         input, select {{ height:36px; }}
         textarea {{ min-height:70px; resize:vertical; }}
+        .danger-btn {{ min-height:36px; border-radius:7px; padding:0 12px; border:1px solid #fecaca; color:var(--red); background:#fff7f7; cursor:pointer; font:inherit; }}
         .job {{ margin-top:8px; color:var(--green); }}
         .filters {{ display:grid; grid-template-columns:120px 120px 1fr 110px; gap:8px; align-items:end; margin:12px 0; }}
         .pager {{ display:flex; justify-content:space-between; align-items:center; color:var(--muted); margin:10px 0; }}
@@ -381,6 +436,8 @@ def web_leads_dashboard(
         .badges {{ display:flex; flex-wrap:wrap; gap:6px; margin:10px 0; }}
         .badge {{ border:1px solid var(--line); border-radius:999px; padding:4px 9px; font-size:12px; color:#334155; }}
         .badge.ok {{ background:#ecfdf5; border-color:#bbf7d0; color:#047857; }}
+        .site-check {{ border:1px solid #bbf7d0; background:#f0fdf4; color:#065f46; border-radius:7px; padding:8px 10px; margin:8px 0 12px; display:grid; gap:2px; }}
+        .site-check span {{ color:#166534; }}
         .columns {{ display:grid; grid-template-columns:1fr 1fr 1fr; gap:12px; border-top:1px solid var(--line); padding-top:12px; }}
         .columns section {{ min-width:0; }}
         details {{ margin-top:12px; border-top:1px solid var(--line); padding-top:10px; color:#334155; }}
@@ -418,20 +475,26 @@ def web_leads_dashboard(
           <form method="post" action="/web-leads/search" class="search-form">
             <label>Сегмент
               <select name="preset">
-                <option value="all">Все ICP1</option>
-                <option value="fmcg">FMCG / еда</option>
-                <option value="beauty">Beauty / household</option>
-                <option value="household">Дом / быт</option>
-                <option value="kids">Детские товары</option>
-                <option value="fashion">Одежда</option>
-                <option value="marketplace_brand">Бренды на MP</option>
-                <option value="exhibitors">Выставки</option>
+                <option value="all" {_selected(selected_preset, "all")}>Все ICP1</option>
+                <option value="fmcg" {_selected(selected_preset, "fmcg")}>FMCG / еда</option>
+                <option value="beauty" {_selected(selected_preset, "beauty")}>Beauty / household</option>
+                <option value="household" {_selected(selected_preset, "household")}>Дом / быт</option>
+                <option value="kids" {_selected(selected_preset, "kids")}>Детские товары</option>
+                <option value="fashion" {_selected(selected_preset, "fashion")}>Одежда</option>
+                <option value="marketplace_brand" {_selected(selected_preset, "marketplace_brand")}>Бренды на MP</option>
+                <option value="exhibitors" {_selected(selected_preset, "exhibitors")}>Выставки</option>
               </select>
             </label>
-            <label>Свои поисковые запросы <textarea name="custom_queries" placeholder="Можно оставить пустым. По одному запросу на строку."></textarea></label>
-            <label>Лимит <input type="number" name="total_limit" min="5" max="120" value="40"></label>
+            <label>Свои поисковые запросы <textarea name="custom_queries" placeholder="Можно оставить пустым. По одному запросу на строку.">{escape(form_custom_queries)}</textarea></label>
+            <label>Лимит <input type="number" name="total_limit" min="5" max="120" value="{form_total_limit}"></label>
             <button class="primary-btn" type="submit">Запустить поиск</button>
           </form>
+          <div class="search-actions">
+            <a class="link-btn" href="/web-leads/export">Excel</a>
+            <form method="post" action="/web-leads/clear" class="inline-form" onsubmit="return confirm('Очистить все web-результаты?')">
+              <button class="danger-btn" type="submit">Очистить результаты</button>
+            </form>
+          </div>
           <div class="job" id="job-text">{escape(job_text)}</div>
         </section>
 

@@ -2,7 +2,7 @@ import logging
 from datetime import datetime, timedelta
 from typing import Iterable
 
-from sqlalchemy import case, desc, func, or_, select
+from sqlalchemy import case, delete, desc, func, or_, select
 
 from models.lead import Lead
 from storage.db import SeenAuthor, SessionLocal
@@ -65,6 +65,11 @@ def save_leads(leads: Iterable[dict]) -> dict:
                 "contacts_source": item.get("contacts_source"),
                 "contact_confidence": item.get("contact_confidence", _contact_confidence(item)),
                 "has_contacts": item.get("has_contacts", False),
+                "has_catalog": item.get("has_catalog", False),
+                "has_cart": item.get("has_cart", False),
+                "ecommerce_score": int(item.get("ecommerce_score") or 0),
+                "site_type": item.get("site_type"),
+                "site_assessment": item.get("site_assessment"),
                 "sales_ready": item.get("sales_ready", False),
                 "status": item.get("status", "new"),
                 "updated_at": datetime.utcnow(),
@@ -168,6 +173,13 @@ def count_web_leads(
         if min_score is not None:
             stmt = stmt.where(Lead.icp_score >= min_score)
         return int(session.execute(stmt).scalar_one() or 0)
+
+
+def clear_web_leads() -> int:
+    with SessionLocal() as session:
+        result = session.execute(delete(Lead))
+        session.commit()
+        return int(result.rowcount or 0)
 
 
 def update_web_lead(

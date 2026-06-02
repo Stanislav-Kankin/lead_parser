@@ -42,6 +42,11 @@ class Lead(Base):
     contacts_source = Column(String, nullable=True)
     contact_confidence = Column(String, nullable=True)
     has_contacts = Column(Boolean, nullable=False, default=False)
+    has_catalog = Column(Boolean, nullable=False, default=False)
+    has_cart = Column(Boolean, nullable=False, default=False)
+    ecommerce_score = Column(Integer, nullable=False, default=0)
+    site_type = Column(String, nullable=True)
+    site_assessment = Column(Text, nullable=True)
     sales_ready = Column(Boolean, nullable=False, default=False)
 
     status = Column(String, nullable=False, default="new")

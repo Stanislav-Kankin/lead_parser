@@ -30,7 +30,53 @@ SECONDARY_PATHS = [
     "/o-kompanii",
     "/gde-kupit",
     "/catalog",
+    "/katalog",
+    "/shop",
+    "/magazin",
+    "/products",
+    "/produktsiya",
+    "/cart",
+    "/basket",
+    "/korzina",
 ]
+
+CATALOG_HINTS = (
+    "catalog",
+    "katalog",
+    "shop",
+    "magazin",
+    "products",
+    "produktsiya",
+    "tovary",
+    "collection",
+    "category",
+    "каталог",
+    "магазин",
+    "продукция",
+    "товары",
+    "коллекция",
+)
+CART_HINTS = (
+    "cart",
+    "basket",
+    "korzina",
+    "checkout",
+    "order",
+    "оформить заказ",
+    "корзина",
+    "в корзину",
+)
+BUY_HINTS = ("купить", "заказать", "в корзину", "оформить", "добавить в корзину", "buy", "add to cart")
+LEADGEN_HINTS = (
+    "оставить заявку",
+    "получить консультацию",
+    "заказать звонок",
+    "обратный звонок",
+    "свяжитесь с нами",
+    "рассчитать стоимость",
+)
+PRODUCT_HINTS = ("артикул", "sku", "наличии", "цена", "руб", "₽", "характеристики", "размер", "объем")
+PRICE_RE = re.compile(r"\b\d{2,7}\s*(?:₽|руб\.?|р\.)\b", re.IGNORECASE)
 
 
 async def analyze_domain(domain: str) -> dict:
@@ -122,6 +168,7 @@ async def _fetch_page(client: httpx.AsyncClient, url: str) -> dict | None:
         "company_legal_name": legal_name,
         "legal_form": legal_form,
         "inn_source": "site_requisites" if inn or legal_name else None,
+        **_analyze_commerce(soup, text),
     }
 
 
@@ -138,6 +185,11 @@ def _empty_result() -> dict:
         "company_legal_name": None,
         "legal_form": None,
         "inn_source": None,
+        "has_catalog": False,
+        "has_cart": False,
+        "ecommerce_score": 0,
+        "site_type": None,
+        "site_assessment": None,
     }
 
 
@@ -149,9 +201,90 @@ def _merge_result(base: dict, page: dict) -> dict:
     for key in ["title", "description", "h1", "email", "phone", "company_inn", "company_ogrn", "company_legal_name", "legal_form", "inn_source"]:
         if not base.get(key) and page.get(key):
             base[key] = page[key]
+    for key in ["has_catalog", "has_cart"]:
+        base[key] = bool(base.get(key) or page.get(key))
+    if int(page.get("ecommerce_score") or 0) > int(base.get("ecommerce_score") or 0):
+        base["ecommerce_score"] = int(page.get("ecommerce_score") or 0)
+        base["site_type"] = page.get("site_type")
+        base["site_assessment"] = page.get("site_assessment")
     merged_text = " ".join(part for part in [base.get("text"), page.get("text")] if part)
     base["text"] = merged_text[:25000]
     return base
+
+
+def _analyze_commerce(soup: BeautifulSoup, text: str) -> dict:
+    lowered_text = (text or "").lower()
+    link_values = []
+    for link in soup.find_all("a", href=True):
+        value = f"{link.get('href', '')} {link.get_text(' ', strip=True)}".lower()
+        link_values.append(value)
+    link_blob = " ".join(link_values[:500])
+
+    button_blob = " ".join(
+        tag.get_text(" ", strip=True).lower()
+        for tag in soup.find_all(["button", "a", "input"])
+        if tag.get_text(" ", strip=True) or tag.get("value")
+    )
+    button_blob = f"{button_blob} {' '.join(str(tag.get('value', '')).lower() for tag in soup.find_all('input'))}"
+
+    catalog_hits = sum(1 for hint in CATALOG_HINTS if hint in link_blob or hint in lowered_text)
+    cart_hits = sum(1 for hint in CART_HINTS if hint in link_blob or hint in lowered_text or hint in button_blob)
+    buy_hits = sum(1 for hint in BUY_HINTS if hint in lowered_text or hint in button_blob)
+    leadgen_hits = sum(1 for hint in LEADGEN_HINTS if hint in lowered_text)
+    product_hits = sum(1 for hint in PRODUCT_HINTS if hint in lowered_text)
+    price_hits = len(PRICE_RE.findall(lowered_text[:20000]))
+    product_link_hits = sum(
+        1
+        for value in link_values[:500]
+        if any(part in value for part in ["/product", "/tovar", "/catalog/", "/katalog/", "/shop/"])
+    )
+
+    has_catalog = catalog_hits > 0 or product_link_hits >= 3
+    has_cart = cart_hits > 0 or buy_hits >= 2
+
+    score = 0
+    if has_catalog:
+        score += 25
+    if has_cart:
+        score += 25
+    if product_link_hits >= 5:
+        score += 12
+    if price_hits >= 3:
+        score += 15
+    elif price_hits:
+        score += 7
+    if product_hits >= 3:
+        score += 10
+    if buy_hits:
+        score += 8
+    if leadgen_hits >= 2 and not has_catalog:
+        score -= 8
+
+    score = max(0, min(100, score))
+
+    if has_catalog and has_cart and score >= 55:
+        site_type = "ecommerce_site"
+        assessment = "есть каталог и признаки корзины/покупки; сайт похож на direct/ecom-канал"
+    elif has_catalog:
+        site_type = "catalog_site"
+        assessment = "есть каталог/товарные разделы, но корзина неочевидна; похоже на каталог или B2B-продажи"
+    elif leadgen_hits >= 2:
+        site_type = "leadgen_landing"
+        assessment = "каталог и корзина не найдены; сайт больше похож на лидоген-лендинг"
+    elif score >= 25:
+        site_type = "commerce_possible"
+        assessment = "есть отдельные коммерческие признаки, но структура продаж неочевидна"
+    else:
+        site_type = "corporate_site"
+        assessment = "каталог, корзина и явная ecom-логика не найдены"
+
+    return {
+        "has_catalog": has_catalog,
+        "has_cart": has_cart,
+        "ecommerce_score": score,
+        "site_type": site_type,
+        "site_assessment": assessment,
+    }
 
 
 def _extract_first(pattern: re.Pattern, text: str | None) -> str | None:

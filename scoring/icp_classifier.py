@@ -142,9 +142,19 @@ def _build_hypothesis(
     channel_hits: list[tuple[str, int]],
     growth_hits: list[tuple[str, int]],
     has_contacts: bool,
+    has_catalog: bool = False,
+    has_cart: bool = False,
+    site_type: str | None = None,
 ) -> tuple[str, str, str]:
     product_part = _format_hits(product_hits, 4) or "есть товарная линейка"
     channel_part = _format_hits(channel_hits, 4) or "каналы продаж неочевидны"
+    site_part = ""
+    if has_catalog and has_cart:
+        site_part = " На сайте видны каталог и покупка/корзина, значит direct можно обсуждать предметно."
+    elif has_catalog:
+        site_part = " На сайте виден каталог, но корзина неочевидна: стоит проверить, как сейчас устроены прямые продажи."
+    elif site_type == "leadgen_landing":
+        site_part = " Сайт больше похож на лидоген-лендинг: возможная точка входа — как превратить спрос в управляемый direct."
 
     if channel_hits and growth_hits:
         hypothesis = (
@@ -171,7 +181,7 @@ def _build_hypothesis(
         cjm_stage = "consideration"
         angle = "Можно писать как к зрелому ICP: коротко обозначить гипотезу потолка текущей модели и предложить диагностический разбор."
 
-    return hypothesis, angle, cjm_stage
+    return hypothesis + site_part, angle, cjm_stage
 
 
 def classify_icp(
@@ -182,6 +192,11 @@ def classify_icp(
     h1: str | None = None,
     text: str | None = None,
     has_contacts: bool = False,
+    has_catalog: bool = False,
+    has_cart: bool = False,
+    ecommerce_score: int = 0,
+    site_type: str | None = None,
+    site_assessment: str | None = None,
 ) -> dict[str, Any]:
     full_text = " ".join(
         part for part in [title, description, h1, company_name, domain, text] if part
@@ -207,6 +222,16 @@ def classify_icp(
         raw_score += 8
     if has_contacts:
         raw_score += 4
+    if has_catalog:
+        raw_score += 8
+    if has_cart:
+        raw_score += 6
+    if ecommerce_score >= 60:
+        raw_score += 8
+    elif ecommerce_score >= 35:
+        raw_score += 4
+    if site_type == "leadgen_landing":
+        raw_score -= 5
 
     score = max(0, min(100, raw_score))
     hard_negative = sum(abs(weight) for _, weight in negative_hits if weight <= -18)
@@ -231,6 +256,9 @@ def classify_icp(
         channel_hits=channel_hits,
         growth_hits=growth_hits,
         has_contacts=has_contacts,
+        has_catalog=has_catalog,
+        has_cart=has_cart,
+        site_type=site_type,
     )
 
     evidence_parts = []
@@ -244,6 +272,8 @@ def classify_icp(
         evidence_parts.append("сигналы роста: " + _format_hits(growth_hits))
     if negative_hits:
         evidence_parts.append("минусы: " + _format_hits(negative_hits))
+    if site_assessment:
+        evidence_parts.append("сайт: " + site_assessment)
 
     reason_parts = [f"score={score}"]
     reason_parts.extend(evidence_parts)

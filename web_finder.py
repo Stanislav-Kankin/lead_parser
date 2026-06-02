@@ -49,6 +49,11 @@ async def collect_web_icp_leads(
                 company_name=candidate.get("company_name"),
                 domain=domain,
                 has_contacts=has_contacts,
+                has_catalog=bool(site.get("has_catalog")),
+                has_cart=bool(site.get("has_cart")),
+                ecommerce_score=int(site.get("ecommerce_score") or 0),
+                site_type=site.get("site_type"),
+                site_assessment=site.get("site_assessment"),
             )
 
             return {
@@ -66,6 +71,11 @@ async def collect_web_icp_leads(
                 "legal_form": site.get("legal_form"),
                 "inn_source": site.get("inn_source"),
                 "has_contacts": has_contacts,
+                "has_catalog": bool(site.get("has_catalog")),
+                "has_cart": bool(site.get("has_cart")),
+                "ecommerce_score": int(site.get("ecommerce_score") or 0),
+                "site_type": site.get("site_type"),
+                "site_assessment": site.get("site_assessment"),
                 "sales_ready": bool(classification["is_icp"] and has_contacts),
                 "status": "new",
                 **classification,

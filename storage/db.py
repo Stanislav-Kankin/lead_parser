@@ -109,6 +109,11 @@ REQUIRED_COLUMNS = {
     "contacts_source": "ALTER TABLE leads ADD COLUMN contacts_source VARCHAR",
     "contact_confidence": "ALTER TABLE leads ADD COLUMN contact_confidence VARCHAR",
     "has_contacts": "ALTER TABLE leads ADD COLUMN has_contacts BOOLEAN DEFAULT 0",
+    "has_catalog": "ALTER TABLE leads ADD COLUMN has_catalog BOOLEAN DEFAULT 0",
+    "has_cart": "ALTER TABLE leads ADD COLUMN has_cart BOOLEAN DEFAULT 0",
+    "ecommerce_score": "ALTER TABLE leads ADD COLUMN ecommerce_score INTEGER DEFAULT 0",
+    "site_type": "ALTER TABLE leads ADD COLUMN site_type VARCHAR",
+    "site_assessment": "ALTER TABLE leads ADD COLUMN site_assessment TEXT",
     "sales_ready": "ALTER TABLE leads ADD COLUMN sales_ready BOOLEAN DEFAULT 0",
     "status": "ALTER TABLE leads ADD COLUMN status VARCHAR DEFAULT 'new'",
     "owner": "ALTER TABLE leads ADD COLUMN owner VARCHAR",
@@ -144,6 +149,9 @@ def _ensure_columns():
         conn.execute(text("UPDATE leads SET domain_normalized = COALESCE(domain_normalized, domain)"))
         conn.execute(text("UPDATE leads SET root_domain = COALESCE(root_domain, domain)"))
         conn.execute(text("UPDATE leads SET has_contacts = CASE WHEN company_email IS NOT NULL OR company_phone IS NOT NULL THEN 1 ELSE COALESCE(has_contacts, 0) END"))
+        conn.execute(text("UPDATE leads SET has_catalog = COALESCE(has_catalog, 0)"))
+        conn.execute(text("UPDATE leads SET has_cart = COALESCE(has_cart, 0)"))
+        conn.execute(text("UPDATE leads SET ecommerce_score = COALESCE(ecommerce_score, 0)"))
         conn.execute(text("UPDATE leads SET sales_ready = CASE WHEN COALESCE(is_icp, 0) = 1 AND COALESCE(has_contacts, 0) = 1 THEN 1 ELSE 0 END"))
         conn.execute(text("UPDATE leads SET contact_confidence = COALESCE(contact_confidence, CASE WHEN company_inn IS NOT NULL OR company_legal_name IS NOT NULL THEN 'high' WHEN company_email IS NOT NULL AND company_phone IS NOT NULL THEN 'medium' WHEN company_email IS NOT NULL OR company_phone IS NOT NULL THEN 'low' ELSE 'low' END)"))
         conn.execute(text("UPDATE leads SET icp_score = COALESCE(icp_score, 0)"))
