@@ -11,8 +11,10 @@ from urllib.parse import parse_qs, urlencode
 from fastapi import BackgroundTasks, FastAPI, Request
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, RedirectResponse
 
+from enrichment.domain_analyzer import analyze_domain
+from scoring.icp_classifier import classify_icp
 from storage.db import init_db
-from storage.lead_repository import clear_web_leads, count_web_leads, get_web_leads, update_web_lead
+from storage.lead_repository import clear_web_leads, count_web_leads, get_web_lead, get_web_leads, save_leads, update_web_lead
 from telegram_signals.exporter import export_signals_to_xlsx
 from telegram_signals.keywords import CHAT_BAD_HINTS, CHAT_DISCOVERY_KEYWORDS, CHAT_GOOD_HINTS, SEGMENT_LABELS
 from telegram_signals.repository import (
@@ -263,6 +265,59 @@ async def update_web_lead_from_dashboard(lead_id: int, request: Request):
     return RedirectResponse(_return_url(request), status_code=303)
 
 
+@app.post("/web-leads/{lead_id}/refresh")
+def refresh_web_lead_from_dashboard(lead_id: int, request: Request):
+    item = get_web_lead(lead_id)
+    if item is None:
+        return RedirectResponse(_return_url(request), status_code=303)
+
+    site = asyncio.run(analyze_domain(item.domain_normalized or item.domain))
+    has_contacts = bool(site.get("email") or site.get("phone"))
+    classification = classify_icp(
+        title=site.get("title") or item.title or item.company_name,
+        description=site.get("description"),
+        h1=site.get("h1"),
+        text=site.get("text"),
+        company_name=item.company_name,
+        domain=item.domain,
+        has_contacts=has_contacts,
+        has_catalog=bool(site.get("has_catalog")),
+        has_cart=bool(site.get("has_cart")),
+        ecommerce_score=int(site.get("ecommerce_score") or 0),
+        site_type=site.get("site_type"),
+        site_assessment=site.get("site_assessment"),
+    )
+    save_leads(
+        [
+            {
+                "query": item.query or "manual_refresh",
+                "company_name": item.company_name,
+                "domain": item.domain,
+                "source": item.source or "refresh",
+                "source_url": item.source_url,
+                "title": site.get("title") or item.title or item.company_name,
+                "company_email": site.get("email"),
+                "company_phone": site.get("phone"),
+                "company_inn": site.get("company_inn"),
+                "company_ogrn": site.get("company_ogrn"),
+                "company_legal_name": site.get("company_legal_name"),
+                "legal_form": site.get("legal_form"),
+                "inn_source": site.get("inn_source"),
+                "has_contacts": has_contacts,
+                "has_catalog": bool(site.get("has_catalog")),
+                "has_cart": bool(site.get("has_cart")),
+                "ecommerce_score": int(site.get("ecommerce_score") or 0),
+                "site_type": site.get("site_type"),
+                "site_assessment": site.get("site_assessment"),
+                "sales_ready": bool(classification["is_icp"] and has_contacts),
+                "status": item.status or "new",
+                **classification,
+            }
+        ]
+    )
+    return RedirectResponse(_return_url(request), status_code=303)
+
+
 @app.get("/web-leads", response_class=HTMLResponse)
 def web_leads_dashboard(
     request: Request,
@@ -372,6 +427,9 @@ def web_leads_dashboard(
               <b>Контакты</b>
               <p>{"<br>".join(contacts)}</p>
             </div>
+            <form method="post" action="/web-leads/{item.id}/refresh">
+              <button class="link-btn" type="submit">Обновить сайт</button>
+            </form>
             <form method="post" action="/web-leads/{item.id}/crm">
               <label>Статус
                 <select name="status">

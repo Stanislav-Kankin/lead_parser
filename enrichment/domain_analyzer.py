@@ -32,6 +32,13 @@ SECONDARY_PATHS = [
     "/kontakty.html",
     "/kontakti",
     "/kontakt",
+    "/nashi-kontakty",
+    "/kontakty/nashi-kontakty",
+    "/contacts/our-contacts",
+    "/our-contacts",
+    "/obratnaya-svyaz",
+    "/feedback",
+    "/support",
     "/rekvizity",
     "/rekvizity/",
     "/about/contacts",
@@ -293,6 +300,10 @@ def _extract_contact_links(soup: BeautifulSoup, current_url: str) -> list[str]:
         "реквизит",
         "филиал",
         "магазин",
+        "наши контакты",
+        "обратная связь",
+        "служба поддержки",
+        "поддержка",
     )
     links: list[str] = []
     for link in soup.find_all("a", href=True):

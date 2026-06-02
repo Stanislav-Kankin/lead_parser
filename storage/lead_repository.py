@@ -119,6 +119,11 @@ def get_last_leads(limit: int = 10, only_with_contacts: bool = True) -> list[Lea
         return list(session.execute(stmt).scalars().all())
 
 
+def get_web_lead(lead_id: int) -> Lead | None:
+    with SessionLocal() as session:
+        return session.get(Lead, lead_id)
+
+
 def get_web_leads(
     *,
     limit: int = 50,
