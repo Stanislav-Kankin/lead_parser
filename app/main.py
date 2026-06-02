@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 from datetime import datetime
 from html import escape
@@ -33,6 +34,7 @@ from telegram_signals.service import collect_signals
 from utils.time_format import format_msk
 from web_finder import collect_web_icp_leads
 from web_exporter import export_web_leads_to_xlsx
+from sources.web_query_templates import load_query_templates, save_query_templates
 
 app = FastAPI(title="AdBeam ICP Finder")
 logger = logging.getLogger(__name__)
@@ -45,6 +47,7 @@ WEB_JOB = {
     "last_result": None,
     "last_preset": "all",
     "last_custom_queries": "",
+    "last_template_category": "косметика",
     "last_total_limit": 40,
 }
 
@@ -192,6 +195,7 @@ async def start_web_leads_search(request: Request, background_tasks: BackgroundT
     form = {key: values[-1] for key, values in parse_qs((await request.body()).decode("utf-8")).items()}
     preset = str(form.get("preset") or "all")
     custom_queries = str(form.get("custom_queries") or "").strip()
+    template_category = str(form.get("template_category") or "").strip()
     try:
         total_limit = max(5, min(120, int(form.get("total_limit") or 40)))
     except ValueError:
@@ -200,6 +204,7 @@ async def start_web_leads_search(request: Request, background_tasks: BackgroundT
         running = bool(WEB_JOB["running"])
         WEB_JOB["last_preset"] = preset
         WEB_JOB["last_custom_queries"] = custom_queries
+        WEB_JOB["last_template_category"] = template_category or WEB_JOB.get("last_template_category") or "косметика"
         WEB_JOB["last_total_limit"] = total_limit
     if not running:
         background_tasks.add_task(_run_web_collect_job, preset, custom_queries or None, total_limit)
@@ -223,6 +228,16 @@ def clear_web_leads_from_dashboard():
                 "last_finished_at": format_msk(datetime.utcnow()),
             }
         )
+    return RedirectResponse("/web-leads", status_code=303)
+
+
+@app.post("/web-leads/query-templates")
+async def save_web_query_templates_from_dashboard(request: Request):
+    form = {key: values[-1] for key, values in parse_qs((await request.body()).decode("utf-8")).items()}
+    save_query_templates(
+        exhibition_templates_text=str(form.get("exhibition_templates") or ""),
+        category_templates_text=str(form.get("category_templates") or ""),
+    )
     return RedirectResponse("/web-leads", status_code=303)
 
 
@@ -272,6 +287,11 @@ def web_leads_dashboard(
         web_job = dict(WEB_JOB)
     selected_preset = str(web_job.get("last_preset") or "all")
     form_custom_queries = str(web_job.get("last_custom_queries") or "")
+    template_category = str(web_job.get("last_template_category") or "косметика")
+    query_templates = load_query_templates()
+    exhibition_templates_text = "\n".join(query_templates["exhibition_templates"])
+    category_templates_text = "\n".join(query_templates["category_templates"])
+    query_templates_json = json.dumps(query_templates, ensure_ascii=False).replace("</", "<\\/")
     try:
         form_total_limit = max(5, min(120, int(web_job.get("last_total_limit") or 40)))
     except ValueError:
@@ -416,6 +436,11 @@ def web_leads_dashboard(
         .search-form {{ display:grid; grid-template-columns:180px 1fr 96px 132px; gap:10px; align-items:end; }}
         .search-actions {{ display:flex; flex-wrap:wrap; gap:8px; margin-top:10px; }}
         .inline-form {{ margin:0; }}
+        .template-panel {{ border-top:1px solid var(--line); margin-top:12px; padding-top:12px; }}
+        .template-controls {{ display:grid; grid-template-columns:220px repeat(3, max-content); gap:8px; align-items:end; }}
+        .template-editor {{ display:grid; grid-template-columns:1fr 1fr 132px; gap:10px; align-items:end; margin-top:10px; }}
+        .template-editor textarea {{ min-height:130px; }}
+        .template-panel details {{ border-top:0; margin-top:10px; padding-top:0; }}
         label {{ display:grid; gap:5px; color:var(--muted); font-size:12px; }}
         input, select, textarea {{ width:100%; border:1px solid #cbd5e1; border-radius:7px; padding:8px 10px; font:inherit; color:var(--text); background:#fff; }}
         input, select {{ height:36px; }}
@@ -447,7 +472,7 @@ def web_leads_dashboard(
         .side-block {{ margin-bottom:10px; }}
         .side-block p {{ color:#334155; margin-top:4px; }}
         .empty {{ background:#fff; border:1px solid var(--line); border-radius:8px; padding:28px; color:var(--muted); }}
-        @media (max-width:980px) {{ .topbar, .lead-card {{ display:block; }} .nav {{ justify-content:flex-start; margin-top:12px; }} .metrics, .columns, .search-form, .filters {{ grid-template-columns:1fr; }} .lead-side {{ border-left:0; border-top:1px solid var(--line); padding:12px 0 0; margin-top:12px; }} }}
+        @media (max-width:980px) {{ .topbar, .lead-card {{ display:block; }} .nav {{ justify-content:flex-start; margin-top:12px; }} .metrics, .columns, .search-form, .filters, .template-controls, .template-editor {{ grid-template-columns:1fr; }} .lead-side {{ border-left:0; border-top:1px solid var(--line); padding:12px 0 0; margin-top:12px; }} }}
       </style>
     </head>
     <body>
@@ -472,7 +497,7 @@ def web_leads_dashboard(
         </section>
 
         <section class="search-panel">
-          <form method="post" action="/web-leads/search" class="search-form">
+          <form id="web-search-form" method="post" action="/web-leads/search" class="search-form">
             <label>Сегмент
               <select name="preset">
                 <option value="all" {_selected(selected_preset, "all")}>Все ICP1</option>
@@ -489,6 +514,28 @@ def web_leads_dashboard(
             <label>Лимит <input type="number" name="total_limit" min="5" max="120" value="{form_total_limit}"></label>
             <button class="primary-btn" type="submit">Запустить поиск</button>
           </form>
+          <div class="template-panel">
+            <div class="template-controls">
+              <label>Категория для шаблонов
+                <input id="template-category" name="template_category" form="web-search-form" value="{escape(template_category)}" placeholder="косметика, снеки, посуда">
+              </label>
+              <button class="link-btn" type="button" data-template-mode="exhibition">Выставки</button>
+              <button class="link-btn" type="button" data-template-mode="category">Категория</button>
+              <button class="link-btn" type="button" data-template-mode="both">Категория + выставки</button>
+            </div>
+            <details>
+              <summary>Редактировать шаблоны поиска</summary>
+              <form method="post" action="/web-leads/query-templates" class="template-editor">
+                <label>Выставочные запросы
+                  <textarea name="exhibition_templates">{escape(exhibition_templates_text)}</textarea>
+                </label>
+                <label>Шаблоны с категорией
+                  <textarea name="category_templates">{escape(category_templates_text)}</textarea>
+                </label>
+                <button class="primary-btn" type="submit">Сохранить</button>
+              </form>
+            </details>
+          </div>
           <div class="search-actions">
             <a class="link-btn" href="/web-leads/export">Excel</a>
             <form method="post" action="/web-leads/clear" class="inline-form" onsubmit="return confirm('Очистить все web-результаты?')">
@@ -518,6 +565,39 @@ def web_leads_dashboard(
         {cards}
       </main>
       <script>
+        const queryTemplates = {query_templates_json};
+        function uniqueLines(lines) {{
+          const seen = new Set();
+          const result = [];
+          for (const raw of lines) {{
+            const value = String(raw || '').trim();
+            const key = value.toLowerCase();
+            if (!value || seen.has(key)) continue;
+            seen.add(key);
+            result.push(value);
+          }}
+          return result;
+        }}
+        function renderCategoryQueries() {{
+          const category = (document.getElementById('template-category')?.value || '').trim();
+          if (!category) return [];
+          return (queryTemplates.category_templates || [])
+            .map((template) => String(template || '').replaceAll('[категория]', category).trim())
+            .filter(Boolean);
+        }}
+        document.querySelectorAll('[data-template-mode]').forEach((button) => {{
+          button.addEventListener('click', () => {{
+            const textarea = document.querySelector('textarea[name="custom_queries"]');
+            if (!textarea) return;
+            const mode = button.getAttribute('data-template-mode');
+            let lines = [];
+            if (mode === 'exhibition') lines = queryTemplates.exhibition_templates || [];
+            if (mode === 'category') lines = renderCategoryQueries();
+            if (mode === 'both') lines = [...renderCategoryQueries(), ...(queryTemplates.exhibition_templates || [])];
+            textarea.value = uniqueLines(lines).join('\\n');
+            textarea.focus();
+          }});
+        }});
         let webJobWasRunning = false;
         async function pollJob() {{
           try {{

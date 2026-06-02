@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from sources.web_query_templates import load_query_templates
+
 
 ICP1_PRESETS = {
     "fmcg": [
@@ -48,10 +50,15 @@ NEGATIVE_SUFFIX = "-маркетплейс -wildberries -ozon -avito -отзыв
 
 
 def preset_queries(preset: str = "all") -> list[str]:
+    if preset == "exhibitors":
+        return load_query_templates()["exhibition_templates"]
     if preset == "all":
         result: list[str] = []
-        for queries in ICP1_PRESETS.values():
-            result.extend(queries)
+        for name, queries in ICP1_PRESETS.items():
+            if name == "exhibitors":
+                result.extend(load_query_templates()["exhibition_templates"])
+            else:
+                result.extend(queries)
         return result
     return ICP1_PRESETS.get(preset, ICP1_PRESETS["fmcg"])
 
