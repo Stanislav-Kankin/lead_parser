@@ -40,8 +40,9 @@ def import_focus_file(path: str | Path) -> dict:
                 lead.company_inn = data["company_inn"]
             if data.get("company_ogrn") and not lead.company_ogrn:
                 lead.company_ogrn = data["company_ogrn"]
-            if data.get("company_legal_name"):
+            if data.get("company_legal_name") and not lead.company_legal_name:
                 lead.company_legal_name = data["company_legal_name"]
+            lead.focus_legal_name = data.get("company_legal_name") or lead.focus_legal_name
             lead.focus_status = data.get("focus_status") or lead.focus_status
             lead.focus_region = data.get("focus_region") or lead.focus_region
             lead.focus_address = data.get("focus_address") or lead.focus_address
@@ -51,6 +52,7 @@ def import_focus_file(path: str | Path) -> dict:
             lead.focus_arbitration = data.get("focus_arbitration") or lead.focus_arbitration
             lead.focus_employees = data.get("focus_employees") or lead.focus_employees
             lead.focus_okved = data.get("focus_okved") or lead.focus_okved
+            lead.focus_other_okved = data.get("focus_other_okved") or lead.focus_other_okved
             lead.focus_director = data.get("focus_director") or lead.focus_director
             lead.focus_msp = data.get("focus_msp") or lead.focus_msp
             lead.focus_phone = data.get("focus_phone") or lead.focus_phone
@@ -165,7 +167,8 @@ def _map_focus_row(row: dict) -> dict:
         "focus_profit": _format_money(_pick(row, "чистаяприбыльубыток", "прибыль", "убыток", "profit")),
         "focus_arbitration": _format_money(_pick(row, "арбитражответчик", "арбитраж", "arbitration")),
         "focus_employees": _format_people(_pick(row, "количествосотрудников", "сотрудников", "сотрудники", "численность", "персонал", "employees", "staff")),
-        "focus_okved": _pick(row, "оквэд", "виддеятельности", "okved"),
+        "focus_okved": _pick(row, "основнойвиддеятельности", "основнойоквэд", "оквэд", "виддеятельности", "okved"),
+        "focus_other_okved": _pick(row, "другиевидыдеятельности", "прочиеоквэд", "дополнительныеоквэд", "otherokved"),
         "focus_director": _pick(row, "фиоруководителя", "руководителя", "руководитель", "директор", "генеральныйдиректор", "director", "ceo"),
         "focus_msp": _pick(row, "реестрмсп", "мсп", "sme"),
         "focus_phone": _pick(row, "номертелефона", "телефон", "phone"),

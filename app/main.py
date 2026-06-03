@@ -48,7 +48,7 @@ from telegram_signals.repository import (
 from telegram_signals.service import collect_signals
 from utils.time_format import format_msk
 from web_finder import collect_web_icp_leads
-from web_exporter import export_inns_to_txt, export_web_leads_to_xlsx
+from web_exporter import export_compact_merged_leads_to_xlsx, export_inns_to_txt, export_web_leads_to_xlsx
 from sources.web_query_templates import load_query_templates, save_query_templates
 
 app = FastAPI(title="AdBeam ICP Finder")
@@ -308,6 +308,16 @@ def export_web_leads(project_id: int = 0):
     )
 
 
+@app.get("/web-leads/export-merged")
+def export_merged_web_leads(project_id: int = 0):
+    file_path = export_compact_merged_leads_to_xlsx(project_id=project_id or None)
+    return FileResponse(
+        file_path,
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        filename=file_path.name,
+    )
+
+
 @app.get("/web-leads/export-inn")
 def export_web_lead_inns(project_id: int = 0):
     file_path = export_inns_to_txt(project_id=project_id or None)
@@ -335,7 +345,7 @@ async def import_focus_from_dashboard(file: UploadFile = File(...), project_id: 
                 "last_finished_at": format_msk(datetime.utcnow()),
             }
         )
-    export_path = export_web_leads_to_xlsx(project_id=project_id or None)
+    export_path = export_compact_merged_leads_to_xlsx(project_id=project_id or None)
     return FileResponse(
         export_path,
         media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
@@ -743,6 +753,7 @@ def web_leads_dashboard(
           <div class="search-actions">
             <a class="link-btn" href="/web-leads/export?project_id={selected_project_id}">Excel: текущий срез</a>
             <a class="link-btn" href="/web-leads/export">Excel: общий пул</a>
+            <a class="link-btn" href="/web-leads/export-merged?project_id={selected_project_id}">Excel: объединенный короткий</a>
             <a class="link-btn" href="/web-leads/export-inn?project_id={selected_project_id}">ИНН: текущий срез</a>
             <a class="link-btn" href="/web-leads/export-inn">ИНН: общий пул</a>
             <form method="post" action="/web-leads/import-focus?project_id={selected_project_id}" enctype="multipart/form-data" class="inline-form">

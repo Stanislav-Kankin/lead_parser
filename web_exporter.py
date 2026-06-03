@@ -138,6 +138,71 @@ def export_web_leads_to_xlsx(project_id: int | None = None) -> Path:
     return file_path
 
 
+def export_compact_merged_leads_to_xlsx(project_id: int | None = None) -> Path:
+    items = [
+        item
+        for item in get_web_leads(limit=10000, project_id=project_id)
+        if item.company_inn and item.focus_loaded_at
+    ]
+
+    wb = Workbook()
+    ws = wb.active
+    ws.title = "merged"
+
+    headers = [
+        "категория для шаблонов",
+        "название сайта",
+        "сайт",
+        "ИНН",
+        "есть каталог",
+        "есть корзина",
+        "юр. название",
+        "наименование (компас)",
+        "номер телефона (компас)",
+        "эл. почта (компас)",
+        "ссылка на сайт (компас)",
+        "выручка (компас)",
+        "баланс (фокус)",
+        "статус (компас)",
+        "основной ОКВЭД (компас)",
+        "прочие ОКВЭД (компас)",
+    ]
+    ws.append(headers)
+    for cell in ws[1]:
+        cell.font = Font(bold=True)
+
+    for item in items:
+        ws.append(
+            [
+                item.search_category or "",
+                item.title or item.company_name or item.domain or "",
+                _site_url(item),
+                item.company_inn or "",
+                "да" if item.has_catalog else "нет",
+                "да" if item.has_cart else "нет",
+                item.company_legal_name or "",
+                item.focus_legal_name or "",
+                item.focus_phone or "",
+                item.focus_email or "",
+                item.focus_website or "",
+                item.focus_revenue or "",
+                item.focus_balance or "",
+                item.focus_status or "",
+                item.focus_okved or "",
+                item.focus_other_okved or "",
+            ]
+        )
+
+    _autosize(ws)
+
+    export_dir = Path("exports")
+    export_dir.mkdir(exist_ok=True)
+    scope = f"project_{project_id}" if project_id else "all"
+    file_path = export_dir / f"merged_compact_{scope}_{datetime.utcnow().strftime('%Y%m%d_%H%M%S')}.xlsx"
+    wb.save(file_path)
+    return file_path
+
+
 def export_inns_to_txt(project_id: int | None = None) -> Path:
     export_dir = Path("exports")
     export_dir.mkdir(exist_ok=True)

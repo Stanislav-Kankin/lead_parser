@@ -104,6 +104,7 @@ REQUIRED_COLUMNS = {
     "legal_form": "ALTER TABLE leads ADD COLUMN legal_form VARCHAR",
     "inn_source": "ALTER TABLE leads ADD COLUMN inn_source VARCHAR",
     "focus_loaded_at": "ALTER TABLE leads ADD COLUMN focus_loaded_at DATETIME",
+    "focus_legal_name": "ALTER TABLE leads ADD COLUMN focus_legal_name VARCHAR",
     "focus_status": "ALTER TABLE leads ADD COLUMN focus_status VARCHAR",
     "focus_region": "ALTER TABLE leads ADD COLUMN focus_region VARCHAR",
     "focus_address": "ALTER TABLE leads ADD COLUMN focus_address VARCHAR",
@@ -113,6 +114,7 @@ REQUIRED_COLUMNS = {
     "focus_arbitration": "ALTER TABLE leads ADD COLUMN focus_arbitration VARCHAR",
     "focus_employees": "ALTER TABLE leads ADD COLUMN focus_employees VARCHAR",
     "focus_okved": "ALTER TABLE leads ADD COLUMN focus_okved VARCHAR",
+    "focus_other_okved": "ALTER TABLE leads ADD COLUMN focus_other_okved TEXT",
     "focus_director": "ALTER TABLE leads ADD COLUMN focus_director VARCHAR",
     "focus_msp": "ALTER TABLE leads ADD COLUMN focus_msp VARCHAR",
     "focus_phone": "ALTER TABLE leads ADD COLUMN focus_phone TEXT",
@@ -166,6 +168,7 @@ def _ensure_columns():
         conn.execute(text("UPDATE leads SET domain_normalized = COALESCE(domain_normalized, domain)"))
         conn.execute(text("UPDATE leads SET root_domain = COALESCE(root_domain, domain)"))
         conn.execute(text("UPDATE leads SET search_category = COALESCE(search_category, lead_type, 'без категории')"))
+        conn.execute(text("UPDATE leads SET focus_legal_name = COALESCE(focus_legal_name, company_legal_name) WHERE focus_loaded_at IS NOT NULL"))
         conn.execute(text("UPDATE leads SET has_contacts = CASE WHEN company_email IS NOT NULL OR company_phone IS NOT NULL THEN 1 ELSE COALESCE(has_contacts, 0) END"))
         conn.execute(text("UPDATE leads SET has_catalog = COALESCE(has_catalog, 0)"))
         conn.execute(text("UPDATE leads SET has_cart = COALESCE(has_cart, 0)"))

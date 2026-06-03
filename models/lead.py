@@ -38,6 +38,7 @@ class Lead(Base):
     inn_source = Column(String, nullable=True)
 
     focus_loaded_at = Column(DateTime, nullable=True)
+    focus_legal_name = Column(String, nullable=True)
     focus_status = Column(String, nullable=True)
     focus_region = Column(String, nullable=True)
     focus_address = Column(String, nullable=True)
@@ -47,6 +48,7 @@ class Lead(Base):
     focus_arbitration = Column(String, nullable=True)
     focus_employees = Column(String, nullable=True)
     focus_okved = Column(String, nullable=True)
+    focus_other_okved = Column(Text, nullable=True)
     focus_director = Column(String, nullable=True)
     focus_msp = Column(String, nullable=True)
     focus_phone = Column(Text, nullable=True)
