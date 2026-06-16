@@ -95,3 +95,36 @@ class LeadProject(Base):
     lead_id = Column(Integer, nullable=False, index=True)
     project_id = Column(Integer, nullable=False, index=True)
     created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+
+
+class SocialLead(Base):
+    __tablename__ = "social_leads"
+
+    id = Column(Integer, primary_key=True)
+    source = Column(String, nullable=False, default="tenchat")
+    source_url = Column(String, nullable=False, unique=True)
+    source_query = Column(Text, nullable=True)
+    profile_url = Column(String, nullable=True)
+    post_url = Column(String, nullable=True)
+
+    person_name = Column(String, nullable=True)
+    role_title = Column(String, nullable=True)
+    company_name = Column(String, nullable=True)
+    title = Column(String, nullable=True)
+    snippet = Column(Text, nullable=True)
+    text = Column(Text, nullable=True)
+
+    lead_score = Column(Integer, nullable=False, default=0)
+    lead_fit = Column(String, nullable=True)
+    likely_icp = Column(String, nullable=True)
+    pain_detected = Column(Text, nullable=True)
+    cjm_stage = Column(String, nullable=True)
+    why_relevant = Column(Text, nullable=True)
+    outreach_angle = Column(Text, nullable=True)
+    opener = Column(Text, nullable=True)
+
+    status = Column(String, nullable=False, default="new")
+    owner = Column(String, nullable=True)
+    comment = Column(Text, nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+    updated_at = Column(DateTime, default=datetime.utcnow, nullable=False)
