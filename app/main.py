@@ -613,7 +613,7 @@ def people_leads_dashboard(
     <head>
       <meta charset="utf-8" />
       <meta name="viewport" content="width=device-width, initial-scale=1" />
-      <title>People ICP</title>
+      <title>TenChat ICP</title>
       <style>
         :root {{ --bg:#eef3f7; --panel:#fff; --text:#0f172a; --muted:#64748b; --line:#d8e1ea; --blue:#2563eb; --green:#059669; }}
         * {{ box-sizing:border-box; }}
@@ -629,21 +629,22 @@ def people_leads_dashboard(
         .nav-pill, .link-btn, .primary-btn, .danger-btn {{ min-height:36px; display:inline-flex; align-items:center; border-radius:7px; padding:0 12px; border:1px solid var(--line); background:#fff; cursor:pointer; }}
         .nav-pill.active, .primary-btn {{ background:var(--blue); border-color:var(--blue); color:#fff; font-weight:700; }}
         .danger-btn {{ border-color:#fecaca; color:#b91c1c; }}
-        .metrics {{ display:grid; grid-template-columns:repeat(4, minmax(0, 1fr)); gap:10px; margin-bottom:12px; }}
+        .metrics {{ display:grid; grid-template-columns:repeat(4, minmax(0, 1fr)); gap:8px; margin-bottom:10px; }}
         .metric, .panel, .lead-card, .empty {{ background:#fff; border:1px solid var(--line); border-radius:8px; }}
-        .metric {{ padding:12px; min-height:78px; }}
-        .metric b {{ display:block; font-size:24px; }}
+        .metric {{ padding:10px 12px; min-height:68px; }}
+        .metric b {{ display:block; font-size:22px; }}
         .metric span, .domain {{ color:var(--muted); }}
-        .panel {{ padding:12px; margin-bottom:12px; }}
+        .panel {{ padding:12px; margin-bottom:10px; }}
         .search-form {{ display:grid; grid-template-columns:1fr 100px 132px; gap:10px; align-items:end; }}
         label {{ display:grid; gap:5px; color:var(--muted); font-size:12px; }}
         input, select, textarea {{ width:100%; border:1px solid #cbd5e1; border-radius:7px; padding:9px 10px; background:#fff; color:#0f172a; font:inherit; }}
-        textarea {{ min-height:86px; resize:vertical; }}
+        textarea {{ min-height:68px; resize:vertical; }}
+        .search-note {{ color:var(--muted); margin-top:8px; }}
         .job {{ color:#059669; margin-top:10px; }}
         .filters {{ display:grid; grid-template-columns:120px 120px 1fr 120px; gap:10px; align-items:end; border-bottom:1px solid var(--line); padding-bottom:12px; margin-bottom:12px; }}
         .pager {{ display:flex; justify-content:space-between; align-items:center; color:var(--muted); margin:10px 0; }}
         .pager-actions {{ display:flex; gap:8px; }}
-        .lead-card {{ display:grid; grid-template-columns:minmax(0,1fr) 260px; gap:14px; padding:14px; margin-bottom:12px; }}
+        .lead-card {{ display:grid; grid-template-columns:minmax(0,1fr) 230px; gap:12px; padding:12px; margin-bottom:10px; }}
         .lead-topline {{ display:flex; justify-content:space-between; gap:12px; }}
         .lead-title {{ display:block; font-size:20px; font-weight:800; }}
         .score {{ width:52px; height:52px; display:grid; place-items:center; border-radius:8px; font-size:22px; font-weight:900; background:#e2e8f0; color:#475569; flex:0 0 auto; }}
@@ -653,7 +654,8 @@ def people_leads_dashboard(
         .badge {{ border:1px solid var(--line); border-radius:999px; padding:4px 9px; font-size:12px; color:#334155; }}
         .badge.ok {{ background:#ecfdf5; border-color:#bbf7d0; color:#047857; }}
         .site-check {{ border:1px solid #bbf7d0; background:#f0fdf4; color:#065f46; border-radius:7px; padding:8px 10px; margin:8px 0 12px; display:grid; gap:2px; }}
-        .columns {{ display:grid; grid-template-columns:1fr 1fr 1fr; gap:12px; border-top:1px solid var(--line); padding-top:12px; }}
+        .columns {{ display:grid; grid-template-columns:1fr 1fr; gap:12px; border-top:1px solid var(--line); padding-top:10px; }}
+        .columns section:last-child {{ display:none; }}
         details {{ margin-top:12px; border-top:1px solid var(--line); padding-top:10px; color:#334155; }}
         summary {{ cursor:pointer; color:var(--blue); font-weight:700; }}
         .lead-side {{ border-left:1px solid var(--line); padding-left:14px; }}
@@ -666,12 +668,12 @@ def people_leads_dashboard(
       <main class="page">
         <div class="topbar">
           <div>
-            <h1>People ICP</h1>
+            <h1>TenChat ICP</h1>
             <div class="subtitle">Ищем не сайты, а людей и контексты: собственники, маркетинг, ecom, бренды и производители с признаками боли по росту, маркетплейсам, direct и спросу.</div>
           </div>
           <nav class="nav">
-            {nav_button("Web ICP", "/web-leads")}
-            {nav_button("People ICP", "/people-leads", True)}
+            {nav_button("Web", "/web-leads")}
+            {nav_button("TenChat", "/people-leads", True)}
             {nav_button("Telegram", "/telegram-signals")}
           </nav>
         </div>
@@ -689,6 +691,7 @@ def people_leads_dashboard(
             <label>Лимит <input type="number" name="total_limit" min="5" max="120" value="{form_total_limit}"></label>
             <button class="primary-btn" type="submit">Запустить</button>
           </form>
+          <div class="search-note">Ищем связку: роль или человек + бренд/производитель/ecom + боль по MP/direct/росту. Без персоны или компании результат режется.</div>
           <div class="actions" style="justify-content:flex-start;margin-top:10px;">
             <a class="link-btn" href="/people-leads/export">Excel</a>
             <form method="post" action="/people-leads/clear" onsubmit="return confirm('Очистить people-результаты?')">
@@ -1071,8 +1074,8 @@ def web_leads_dashboard(
             <div class="subtitle">Поиск в сети ICP 1 по запросам. Полуавтоматический режим.</div>
           </div>
           <nav class="nav">
-            {nav_button("Web ICP", "/web-leads", True)}
-            {nav_button("People ICP", "/people-leads")}
+            {nav_button("Web", "/web-leads", True)}
+            {nav_button("TenChat", "/people-leads")}
             {nav_button("Telegram", "/telegram-signals")}
             {nav_button("Настройки TG", "/telegram-signals/settings")}
           </nav>
@@ -1334,7 +1337,7 @@ def _contact_link(item) -> str:
 
 def _return_url(request: Request) -> str:
     referer = request.headers.get("referer") or ""
-    if "/web-leads" in referer or "/telegram-signals" in referer:
+    if "/web-leads" in referer or "/people-leads" in referer or "/telegram-signals" in referer:
         return referer
     return "/web-leads"
 
@@ -1677,6 +1680,9 @@ def search_settings_dashboard():
             <div class="subtitle">Сбор теперь работает в два контура: ищет источники по темам и отдельно ищет сами сообщения по болевым формулировкам. В рабочую базу попадают только тексты, где классификатор видит ICP, боль и повод для аккуратного outreach.</div>
           </div>
           <div class="top-actions">
+            <a class="link-btn" href="/web-leads">Web</a>
+            <a class="link-btn" href="/people-leads">TenChat</a>
+            <a class="link-btn" href="/telegram-signals">Telegram</a>
             <a class="link-btn" href="/telegram-signals">База лидов</a>
             <a class="link-btn" href="/telegram-signals?view=raw">Сырье</a>
           </div>
@@ -1777,6 +1783,9 @@ def telegram_signals_analytics():
             <div class="subtitle">Смотрим, почему отбраковываем сигналы и какие источники реально дают лидов.</div>
           </div>
           <div class="links">
+            <a class="button" href="/web-leads">Web</a>
+            <a class="button" href="/people-leads">TenChat</a>
+            <a class="button" href="/telegram-signals">Telegram</a>
             <a class="button" href="/telegram-signals">База лидов</a>
             <a class="button" href="/telegram-signals/settings">Настройки</a>
           </div>
@@ -2637,6 +2646,9 @@ def telegram_signals_dashboard(
             <h1>База лидов</h1>
             <div class="subtitle">Рабочая база лидов: фильтруем сигналы, помечаем контакт, ведем статус до ответа и встречи.</div>
             <div class="top-links">
+              <a class="link-btn" href="/web-leads">Web</a>
+              <a class="link-btn" href="/people-leads">TenChat</a>
+              <a class="link-btn" href="/telegram-signals">Telegram</a>
               <a class="link-btn" href="/telegram-signals/settings">Настройки</a>
               <a class="link-btn" href="/telegram-signals/analytics">Аналитика</a>
               <a class="link-btn" href="/telegram-signals/export?kind=all">Excel</a>

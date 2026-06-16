@@ -61,9 +61,12 @@ def get_social_leads(
     status: str | None = None,
     source: str | None = None,
     query: str | None = None,
+    people_only: bool = True,
 ) -> list[SocialLead]:
     with SessionLocal() as session:
         stmt = select(SocialLead)
+        if people_only:
+            stmt = stmt.where(or_(SocialLead.person_name.is_not(None), SocialLead.role_title.is_not(None)))
         if min_score is not None:
             stmt = stmt.where(SocialLead.lead_score >= min_score)
         if status:
@@ -91,9 +94,12 @@ def count_social_leads(
     min_score: int | None = None,
     status: str | None = None,
     source: str | None = None,
+    people_only: bool = True,
 ) -> int:
     with SessionLocal() as session:
         stmt = select(func.count(SocialLead.id))
+        if people_only:
+            stmt = stmt.where(or_(SocialLead.person_name.is_not(None), SocialLead.role_title.is_not(None)))
         if min_score is not None:
             stmt = stmt.where(SocialLead.lead_score >= min_score)
         if status:

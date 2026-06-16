@@ -131,7 +131,9 @@ async def collect_people_leads(
         async with semaphore:
             page = await _fetch_public_page(candidate.get("url"))
             item = _build_social_lead(candidate, page)
-            if int(item.get("lead_score") or 0) < 28:
+            if not _is_actionable_people_candidate(item):
+                return None
+            if int(item.get("lead_score") or 0) < 38:
                 return None
             return item
 
@@ -264,6 +266,16 @@ def _classify_people_lead(
         score += 8
     if role_hits and icp_hits:
         score += 7
+    if not person_name and not role_title:
+        score = min(score, 42)
+    if not person_name and not role_title and not company_name:
+        score = min(score, 30)
+    if not role_hits:
+        score -= 10
+    if not icp_hits:
+        score -= 8
+    if _looks_like_generic_article(full_text) and not person_name:
+        score -= 18
     score = max(0, min(100, score))
 
     if score >= 70:
@@ -313,6 +325,32 @@ def _build_angle(pain_hits: list[tuple[str, int]], icp_hits: list[tuple[str, int
     if icp:
         return "Мягко проверить, есть ли задача роста вне одной площадки и контроля спроса."
     return "Начать с короткого диагностического вопроса без продажи."
+
+
+def _is_actionable_people_candidate(item: dict) -> bool:
+    has_person = bool(item.get("person_name") or item.get("role_title"))
+    has_company = bool(item.get("company_name"))
+    score = int(item.get("lead_score") or 0)
+    if has_person and score >= 38:
+        return True
+    if has_company and score >= 45:
+        return True
+    return False
+
+
+def _looks_like_generic_article(text: str) -> bool:
+    article_markers = [
+        "как ",
+        "почему ",
+        "что такое",
+        "гид ",
+        "инструкция",
+        "чек-лист",
+        "новости",
+        "разбор",
+        "кейс",
+    ]
+    return any(marker in text[:700] for marker in article_markers)
 
 
 def _build_opener(person_name: str | None, role_title: str | None, item: dict) -> str:
