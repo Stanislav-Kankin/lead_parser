@@ -386,16 +386,6 @@ async def collect_people_leads(
     )
     raw_candidates: list[dict] = candidates
     source_mode = "tenchat_browser"
-    if not candidates:
-        source_mode = "external_search_fallback"
-        search_limit = max(total_limit, min(total_limit * 3, 600))
-        raw_candidates = await search_urls_multi(
-            queries,
-            per_query_limit=per_query_limit,
-            total_limit=search_limit,
-            allowed_domains={"tenchat.ru"},
-        )
-        candidates = _filter_people_candidates(raw_candidates)[: max(1, int(total_limit or 40))]
 
     semaphore = asyncio.Semaphore(max(1, concurrency))
 
@@ -472,7 +462,7 @@ def build_people_query_items(
                 )
 
     for line in [line.strip() for line in (custom_queries or "").splitlines() if line.strip()]:
-        query = line if "site:" in line else f"site:tenchat.ru {line}"
+        query = line
         if query not in seen:
             seen.add(query)
             items.append(QueryItem(query=query))
@@ -515,8 +505,7 @@ async def _search_people_candidates_browser(
     try:
         from playwright.async_api import async_playwright
     except Exception as exc:
-        logger.warning("[tenchat_finder] playwright_unavailable error=%s", exc)
-        return []
+        raise RuntimeError("Playwright/Chromium недоступен: прямой поиск TenChat не может запуститься") from exc
 
     page_size = 20
     results: list[dict] = []
@@ -576,6 +565,11 @@ async def _search_people_candidates_browser(
                     if not isinstance(profiles, list) or not profiles:
                         break
                     for profile in profiles:
+                        username = str(profile.get("username") or profile.get("defaultUsername") or profile.get("id") or "").strip()
+                        if username:
+                            full_profile = await _fetch_tenchat_profile_from_browser(page, username)
+                            if full_profile:
+                                profile = {**profile, **full_profile}
                         candidate = _candidate_from_tenchat_profile(profile, query_item=query_item, search_text=search_text)
                         profile_key = (candidate.get("profile_url") or candidate.get("url") or "").lower().rstrip("/")
                         if not profile_key or profile_key in seen_profiles:
@@ -589,7 +583,7 @@ async def _search_people_candidates_browser(
             await context.close()
     except Exception as exc:
         logger.exception("[tenchat_finder] browser_search_failed error=%s", exc)
-        return []
+        raise RuntimeError(f"Браузерный поиск TenChat не сработал: {exc}") from exc
     finally:
         if browser:
             try:
@@ -597,6 +591,27 @@ async def _search_people_candidates_browser(
             except Exception:
                 pass
     return results
+
+
+async def _fetch_tenchat_profile_from_browser(page, username: str) -> dict:
+    try:
+        data = await page.evaluate(
+            """
+            async (username) => {
+              const response = await fetch(`/gostinder/api/web/account/username/${encodeURIComponent(username)}`, {
+                method: 'GET',
+                headers: { accept: 'application/json' }
+              });
+              if (!response.ok) return null;
+              return await response.json();
+            }
+            """,
+            username,
+        )
+    except Exception as exc:
+        logger.info("[tenchat_finder] full_profile_fetch_failed username=%s error=%s", username, exc)
+        return {}
+    return data if isinstance(data, dict) else {}
 
 
 def _tenchat_search_text(query: str | None) -> str | None:
@@ -626,24 +641,21 @@ def _candidate_from_tenchat_profile(profile: dict, *, query_item: QueryItem, sea
     username = str(profile.get("username") or profile.get("defaultUsername") or profile.get("id") or "").strip()
     profile_url = f"https://tenchat.ru/{username}" if username else ""
     person_name = _full_name_from_profile(profile)
-    role_title = _profile_nested_value(profile, "position", "name") or _profile_nested_value(profile, "lastWorkplace", "positionName")
+    role_title = _profile_position_name(profile) or _profile_nested_value(profile, "lastWorkplace", "positionName")
     partner_name = str(profile.get("partnerName") or "").strip()
     partner_ogrn = str(profile.get("partnerOgrn") or "").strip()
     partner_type = str(profile.get("partnerType") or "").strip()
-    last_company_name = _profile_nested_value(profile, "lastWorkplace", "companyName")
-    last_company_ogrn = _profile_nested_value(profile, "lastWorkplace", "companyOgrn")
+    last_workplace = _best_workplace(profile)
+    last_company_name = _dict_value(last_workplace, "companyName")
+    last_company_ogrn = _dict_value(last_workplace, "companyOgrn")
     has_legal_partner = bool(_legal_name_from_api_company(partner_name)) or partner_type in {"LEGAL", "LEGAL_ENTITY", "RUS_COMPANY"}
     company_name = (partner_name if has_legal_partner else None) or last_company_name or None
     company_ogrn = (partner_ogrn if has_legal_partner else None) or last_company_ogrn or None
     company_url = f"https://tenchat.ru/{company_ogrn}" if company_ogrn and re.fullmatch(r"\d{10,15}", str(company_ogrn)) else None
-    city = _profile_nested_value(profile, "city", "city")
-    country = _profile_nested_value(profile, "city", "country")
-    skills = ", ".join(
-        str(item.get("name") or "").strip()
-        for item in (profile.get("keySkills") or [])
-        if isinstance(item, dict) and item.get("name")
-    )
-    highlight = _strip_html(profile.get("highlightDescription") or "")
+    city = _profile_city(profile)
+    country = _profile_country(profile)
+    skills = _profile_skills(profile)
+    highlight = _strip_html(profile.get("highlightDescription") or profile.get("description") or "")
     work_status = str(profile.get("workStatus") or "")
     text_parts = [
         person_name,
@@ -702,6 +714,64 @@ def _profile_nested_value(profile: dict, key: str, nested_key: str) -> str | Non
     return str(nested).strip() if nested else None
 
 
+def _dict_value(value: dict | None, key: str) -> str | None:
+    if not isinstance(value, dict):
+        return None
+    item = value.get(key)
+    return str(item).strip() if item else None
+
+
+def _profile_position_name(profile: dict) -> str | None:
+    position = profile.get("position")
+    if isinstance(position, dict):
+        return _dict_value(position, "name")
+    if position:
+        return str(position).strip()
+    return str(profile.get("positionName") or "").strip() or None
+
+
+def _best_workplace(profile: dict) -> dict | None:
+    last_workplace = profile.get("lastWorkplace")
+    if isinstance(last_workplace, dict):
+        return last_workplace
+    workplaces = profile.get("workplaces")
+    if isinstance(workplaces, list):
+        for item in workplaces:
+            if isinstance(item, dict) and (item.get("companyOgrn") or item.get("companyName")):
+                return item
+    return None
+
+
+def _profile_city(profile: dict) -> str | None:
+    city = profile.get("city")
+    if isinstance(city, dict):
+        return _dict_value(city, "city")
+    if city:
+        return str(city).strip()
+    return _profile_nested_value(profile, "cityInfo", "city")
+
+
+def _profile_country(profile: dict) -> str | None:
+    city = profile.get("city")
+    if isinstance(city, dict):
+        return _dict_value(city, "country")
+    return _profile_nested_value(profile, "cityInfo", "country")
+
+
+def _profile_skills(profile: dict) -> str:
+    raw_skills = profile.get("keySkills") or profile.get("skills") or []
+    values: list[str] = []
+    if isinstance(raw_skills, list):
+        for item in raw_skills:
+            if isinstance(item, dict):
+                value = item.get("name")
+            else:
+                value = item
+            if value:
+                values.append(str(value).strip())
+    return ", ".join(value for value in values if value)
+
+
 def _strip_html(value: str | None) -> str:
     if not value:
         return ""
@@ -711,7 +781,7 @@ def _strip_html(value: str | None) -> str:
 def _legal_name_from_api_company(value: str | None) -> str | None:
     if not value:
         return None
-    cleaned = _clean_value(value)
+    cleaned = re.sub(r"\s+", " ", str(value)).strip()
     if not cleaned:
         return None
     if re.search(r"\b(ооо|ао|пао|ип)\b", cleaned, flags=re.IGNORECASE):
@@ -1094,11 +1164,11 @@ def _is_actionable_people_candidate(item: dict) -> bool:
     has_person_context = bool(item.get("person_name") or item.get("role_title"))
     has_web_match = bool(item.get("matched_web_lead_id"))
     has_profile = bool(item.get("profile_url"))
-    if score < 38:
+    if score < 30:
         return False
     if has_web_match and (has_person_context or has_profile):
         return True
-    if score >= 45 and has_person_context and has_profile:
+    if score >= 30 and has_person_context and has_profile:
         return True
     return False
 

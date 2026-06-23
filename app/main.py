@@ -679,10 +679,11 @@ def _people_leads_dashboard_v2(
     elif result and "deleted" in result:
         job_text = f"Очищено связей/лидов: {result.get('deleted', 0)}."
     elif result:
+        source_mode = result.get("source_mode") or "unknown"
         job_text = (
             f"Последний сбор: {result.get('created', 0)} новых, {result.get('updated', 0)} обновлено, "
             f"{result.get('kept', 0)} оставлено из {result.get('candidates', 0)} кандидатов. "
-            f"Проект: {result.get('project_name') or 'общий пул'}. Завершен: {people_job.get('last_finished_at')}"
+            f"Источник: {source_mode}. Проект: {result.get('project_name') or 'общий пул'}. Завершен: {people_job.get('last_finished_at')}"
         )
     else:
         job_text = "TenChat-поиск еще не запускался."
@@ -1002,10 +1003,11 @@ def people_leads_dashboard(
     elif result and "deleted" in result:
         job_text = f"TenChat-результаты очищены: удалено {result.get('deleted', 0)}."
     elif result:
+        source_mode = result.get("source_mode") or "unknown"
         job_text = (
             f"Последний сбор: {result.get('created', 0)} новых, {result.get('updated', 0)} обновлено, "
             f"{result.get('kept', 0)} оставлено из {result.get('candidates', 0)} кандидатов. "
-            f"Завершен: {people_job.get('last_finished_at')}"
+            f"Источник: {source_mode}. Завершен: {people_job.get('last_finished_at')}"
         )
     else:
         job_text = "TenChat-поиск еще не запускался."
