@@ -16,7 +16,7 @@ from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, Redirect
 from enrichment.domain_analyzer import analyze_domain
 from focus_importer import import_focus_file
 from scoring.icp_classifier import classify_icp
-from social_leads.exporter import export_social_leads_to_xlsx
+from social_leads.exporter import export_social_lead_inns_to_xlsx, export_social_leads_to_xlsx
 from social_leads.tenchat_finder import DEFAULT_TENCHAT_PRESET, TENCHAT_SEARCH_PRESETS, collect_people_leads
 from storage.db import init_db
 from storage.lead_repository import (
@@ -520,6 +520,16 @@ def export_people_leads(project_id: int = 0):
     )
 
 
+@app.get("/people-leads/export-inn")
+def export_people_lead_inns(project_id: int = 0):
+    file_path = export_social_lead_inns_to_xlsx(project_id=project_id or None)
+    return FileResponse(
+        file_path,
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        filename=file_path.name,
+    )
+
+
 @app.post("/people-leads/{lead_id}/crm")
 async def update_people_lead_from_dashboard(lead_id: int, request: Request):
     form = {key: values[-1] for key, values in parse_qs((await request.body()).decode("utf-8")).items()}
@@ -693,6 +703,7 @@ def _people_leads_dashboard_v2(
     next_params = {**query_params, "page": page + 1}
     cards = "".join(card(item) for item in items) or "<div class='empty'>Под эти фильтры людей пока нет.</div>"
     selected_project_title = "Общий пул" if not selected_project_id else (selected_project.name if selected_project else "Проект")
+    inn_export_href = f"/people-leads/export-inn?project_id={selected_project_id}" if selected_project_id else "/people-leads/export-inn"
     project_warning = (
         "<div class='warning'>В этом проекте пока 0 web-компаний. Для поиска по конкретным компаниям сначала собери Web ICP базу в этот проект.</div>"
         if selected_project_id and selected_project_web_count == 0
@@ -826,6 +837,7 @@ def _people_leads_dashboard_v2(
                 <div class="actions">
                   <a class="link-btn" href="/people-leads/export">Excel: вся база</a>
                   <a class="primary-btn" href="/people-leads/export?project_id={selected_project_id}">Excel: проект</a>
+                  <a class="primary-btn" href="{inn_export_href}">Скачать ИНН</a>
                 </div>
               </div>
               <form method="get" action="/people-leads" class="filters">

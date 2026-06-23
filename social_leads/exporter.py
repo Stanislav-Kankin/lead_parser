@@ -80,6 +80,40 @@ def export_social_leads_to_xlsx(project_id: int | None = None) -> Path:
     return file_path
 
 
+def export_social_lead_inns_to_xlsx(project_id: int | None = None) -> Path:
+    items = get_social_leads(limit=10000, project_id=project_id)
+
+    wb = Workbook()
+    ws = wb.active
+    ws.title = "inn"
+    headers = ["Имя", "Организация", "ИНН"]
+    ws.append(headers)
+    for cell in ws[1]:
+        cell.font = Font(bold=True)
+
+    seen_inns: set[str] = set()
+    for item in items:
+        inn = str(item.company_inn or "").strip()
+        if not inn or inn in seen_inns:
+            continue
+        seen_inns.add(inn)
+        ws.append(
+            [
+                item.person_name or "",
+                item.company_legal_name or item.company_name or "",
+                inn,
+            ]
+        )
+
+    _autosize(ws)
+    export_dir = Path("exports")
+    export_dir.mkdir(exist_ok=True)
+    scope = f"project_{project_id}_" if project_id else "all_"
+    file_path = export_dir / f"people_inn_{scope}{datetime.utcnow().strftime('%Y%m%d_%H%M%S')}.xlsx"
+    wb.save(file_path)
+    return file_path
+
+
 def _autosize(ws) -> None:
     for col_idx, column_cells in enumerate(ws.columns, start=1):
         max_len = 0

@@ -3,7 +3,7 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Iterable
 
-from sqlalchemy import delete, desc, func, or_, select
+from sqlalchemy import and_, case, delete, desc, func, or_, select
 
 from models.lead import SearchProject, SocialLead, SocialLeadProject
 from storage.db import SessionLocal
@@ -132,7 +132,11 @@ def get_social_leads(
                     SocialLead.pain_detected.ilike(needle),
                 )
             )
-        stmt = stmt.order_by(desc(SocialLead.lead_score), desc(SocialLead.updated_at)).offset(offset).limit(limit)
+        has_inn = case(
+            (and_(SocialLead.company_inn.is_not(None), SocialLead.company_inn != ""), 1),
+            else_=0,
+        )
+        stmt = stmt.order_by(desc(has_inn), desc(SocialLead.lead_score), desc(SocialLead.updated_at)).offset(offset).limit(limit)
         return list(session.execute(stmt).scalars().all())
 
 
