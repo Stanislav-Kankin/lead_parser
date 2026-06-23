@@ -151,6 +151,14 @@ SEARCH_PROFILE_REQUIRED_COLUMNS = {
     "source_chats_text": "ALTER TABLE search_profiles ADD COLUMN source_chats_text TEXT",
 }
 
+SOCIAL_LEAD_REQUIRED_COLUMNS = {
+    "company_inn": "ALTER TABLE social_leads ADD COLUMN company_inn VARCHAR",
+    "company_legal_name": "ALTER TABLE social_leads ADD COLUMN company_legal_name VARCHAR",
+    "matched_web_lead_id": "ALTER TABLE social_leads ADD COLUMN matched_web_lead_id INTEGER",
+    "matched_web_domain": "ALTER TABLE social_leads ADD COLUMN matched_web_domain VARCHAR",
+    "matched_web_title": "ALTER TABLE social_leads ADD COLUMN matched_web_title VARCHAR",
+}
+
 
 def _ensure_columns():
     inspector = inspect(engine)
@@ -224,11 +232,24 @@ def _ensure_search_profile_columns():
                 conn.execute(text(ddl))
 
 
+def _ensure_social_lead_columns():
+    inspector = inspect(engine)
+    if "social_leads" not in inspector.get_table_names():
+        return
+
+    columns = {col["name"] for col in inspector.get_columns("social_leads")}
+    with engine.begin() as conn:
+        for name, ddl in SOCIAL_LEAD_REQUIRED_COLUMNS.items():
+            if name not in columns:
+                conn.execute(text(ddl))
+
+
 def init_db():
     Base.metadata.create_all(bind=engine)
     _ensure_columns()
     _ensure_telegram_signal_columns()
     _ensure_search_profile_columns()
+    _ensure_social_lead_columns()
     _ensure_default_search_profiles()
     _normalize_search_profiles()
 

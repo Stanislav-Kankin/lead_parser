@@ -110,6 +110,11 @@ class SocialLead(Base):
     person_name = Column(String, nullable=True)
     role_title = Column(String, nullable=True)
     company_name = Column(String, nullable=True)
+    company_inn = Column(String, nullable=True)
+    company_legal_name = Column(String, nullable=True)
+    matched_web_lead_id = Column(Integer, nullable=True, index=True)
+    matched_web_domain = Column(String, nullable=True)
+    matched_web_title = Column(String, nullable=True)
     title = Column(String, nullable=True)
     snippet = Column(Text, nullable=True)
     text = Column(Text, nullable=True)
@@ -128,3 +133,13 @@ class SocialLead(Base):
     comment = Column(Text, nullable=True)
     created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
     updated_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+
+
+class SocialLeadProject(Base):
+    __tablename__ = "social_lead_projects"
+    __table_args__ = (UniqueConstraint("social_lead_id", "project_id", name="uq_social_lead_project"),)
+
+    id = Column(Integer, primary_key=True)
+    social_lead_id = Column(Integer, nullable=False, index=True)
+    project_id = Column(Integer, nullable=False, index=True)
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)

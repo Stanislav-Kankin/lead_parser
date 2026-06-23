@@ -33,6 +33,7 @@ from storage.lead_repository import (
 from storage.social_lead_repository import (
     clear_social_leads,
     count_social_leads,
+    count_social_leads_with_inn,
     get_social_leads,
     update_social_lead,
 )
@@ -85,6 +86,9 @@ PEOPLE_JOB = {
     "last_preset": DEFAULT_TENCHAT_PRESET,
     "last_custom_queries": "",
     "last_total_limit": 40,
+    "last_project_id": None,
+    "last_project_name": "",
+    "last_project_limit": 25,
 }
 
 DASHBOARD_JOB = {
@@ -376,6 +380,9 @@ def _run_people_collect_job(
     custom_queries: str | None = None,
     total_limit: int = 40,
     preset: str = DEFAULT_TENCHAT_PRESET,
+    project_id: int | None = None,
+    project_name: str | None = None,
+    project_limit: int = 25,
 ) -> None:
     with JOB_LOCK:
         if PEOPLE_JOB["running"]:
@@ -390,6 +397,9 @@ def _run_people_collect_job(
                 "last_preset": preset if preset in TENCHAT_SEARCH_PRESETS else DEFAULT_TENCHAT_PRESET,
                 "last_custom_queries": custom_queries or "",
                 "last_total_limit": max(5, min(120, int(total_limit or 40))),
+                "last_project_id": project_id,
+                "last_project_name": project_name or "",
+                "last_project_limit": max(1, min(80, int(project_limit or 25))),
             }
         )
 
@@ -399,6 +409,9 @@ def _run_people_collect_job(
                 custom_queries=custom_queries,
                 preset=preset,
                 total_limit=max(5, min(120, int(total_limit or 40))),
+                project_id=project_id,
+                project_name=project_name,
+                project_limit=max(1, min(80, int(project_limit or 25))),
             )
         )
         with JOB_LOCK:
@@ -431,17 +444,49 @@ async def start_people_leads_search(request: Request, background_tasks: Backgrou
         preset = DEFAULT_TENCHAT_PRESET
     custom_queries = str(form.get("custom_queries") or "").strip()
     try:
+        project_id = int(form.get("project_id") or 0) or None
+    except ValueError:
+        project_id = None
+    project = get_project(project_id)
+    project_name = project.name if project else ""
+    try:
         total_limit = max(5, min(120, int(form.get("total_limit") or 40)))
     except ValueError:
         total_limit = 40
+    try:
+        project_limit = max(1, min(80, int(form.get("project_limit") or 25)))
+    except ValueError:
+        project_limit = 25
     with JOB_LOCK:
         running = bool(PEOPLE_JOB["running"])
         PEOPLE_JOB["last_preset"] = preset
         PEOPLE_JOB["last_custom_queries"] = custom_queries
         PEOPLE_JOB["last_total_limit"] = total_limit
+        PEOPLE_JOB["last_project_id"] = project_id
+        PEOPLE_JOB["last_project_name"] = project_name
+        PEOPLE_JOB["last_project_limit"] = project_limit
     if not running:
-        background_tasks.add_task(_run_people_collect_job, custom_queries or None, total_limit, preset)
-    return RedirectResponse("/people-leads", status_code=303)
+        background_tasks.add_task(
+            _run_people_collect_job,
+            custom_queries or None,
+            total_limit,
+            preset,
+            project_id,
+            project_name,
+            project_limit,
+        )
+    redirect_url = f"/people-leads?project_id={project_id}" if project_id else "/people-leads"
+    return RedirectResponse(redirect_url, status_code=303)
+
+
+@app.post("/people-leads/projects")
+async def create_people_project(request: Request):
+    form = {key: values[-1] for key, values in parse_qs((await request.body()).decode("utf-8")).items()}
+    project = get_or_create_project(str(form.get("project_name") or "Новый проект"))
+    with JOB_LOCK:
+        PEOPLE_JOB["last_project_id"] = project.id
+        PEOPLE_JOB["last_project_name"] = project.name
+    return RedirectResponse(f"/people-leads?project_id={project.id}", status_code=303)
 
 
 @app.get("/people-leads/job-status")
@@ -451,8 +496,8 @@ def people_leads_job_status():
 
 
 @app.post("/people-leads/clear")
-def clear_people_leads_from_dashboard():
-    deleted = clear_social_leads()
+def clear_people_leads_from_dashboard(project_id: int = 0):
+    deleted = clear_social_leads(project_id=project_id or None)
     with JOB_LOCK:
         PEOPLE_JOB.update(
             {
@@ -461,12 +506,13 @@ def clear_people_leads_from_dashboard():
                 "last_finished_at": format_msk(datetime.utcnow()),
             }
         )
-    return RedirectResponse("/people-leads", status_code=303)
+    redirect_url = f"/people-leads?project_id={project_id}" if project_id else "/people-leads"
+    return RedirectResponse(redirect_url, status_code=303)
 
 
 @app.get("/people-leads/export")
-def export_people_leads():
-    file_path = export_social_leads_to_xlsx()
+def export_people_leads(project_id: int = 0):
+    file_path = export_social_leads_to_xlsx(project_id=project_id or None)
     return FileResponse(
         file_path,
         media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
@@ -486,15 +532,358 @@ async def update_people_lead_from_dashboard(lead_id: int, request: Request):
     return RedirectResponse(_return_url(request), status_code=303)
 
 
+def _people_leads_dashboard_v2(
+    *,
+    request: Request,
+    status: str = "",
+    min_score: int = 0,
+    q: str = "",
+    project_id: int = 0,
+    page: int = 1,
+    per_page: int = 40,
+) -> str:
+    page = max(1, page)
+    per_page = max(10, min(100, per_page))
+    offset = (page - 1) * per_page
+    selected_project_id = int(project_id or 0)
+    items = get_social_leads(
+        limit=per_page,
+        offset=offset,
+        status=status or None,
+        min_score=min_score or None,
+        query=q or None,
+        project_id=selected_project_id or None,
+    )
+    with JOB_LOCK:
+        people_job = dict(PEOPLE_JOB)
+
+    projects = list_projects()
+    selected_project = get_project(selected_project_id) if selected_project_id else None
+    search_project_id = selected_project_id or int(people_job.get("last_project_id") or 0)
+    selected_people_preset = str(people_job.get("last_preset") or DEFAULT_TENCHAT_PRESET)
+    if selected_people_preset not in TENCHAT_SEARCH_PRESETS:
+        selected_people_preset = DEFAULT_TENCHAT_PRESET
+    form_custom_queries = str(people_job.get("last_custom_queries") or "")
+    preset_queries = "\n".join(TENCHAT_SEARCH_PRESETS[selected_people_preset]["queries"])
+    preset_options = "".join(
+        f"<option value='{escape(value)}' {_selected(selected_people_preset, value)}>{escape(config['label'])}</option>"
+        for value, config in TENCHAT_SEARCH_PRESETS.items()
+    )
+    form_total_limit = max(5, min(120, int(people_job.get("last_total_limit") or 40)))
+    form_project_limit = max(1, min(80, int(people_job.get("last_project_limit") or 25)))
+
+    def nav_button(label: str, href: str, active: bool = False) -> str:
+        cls = "nav-pill active" if active else "nav-pill"
+        return f'<a class="{cls}" href="{escape(href)}">{escape(label)}</a>'
+
+    def metric(label: str, value: int) -> str:
+        return f"<div class='metric'><b>{value}</b><span>{escape(label)}</span></div>"
+
+    def badge(text: str, tone: str = "") -> str:
+        return f"<span class='badge {tone}'>{escape(text or '')}</span>"
+
+    def project_options(current_id: int, include_all: bool = False) -> str:
+        options = []
+        if include_all:
+            options.append(f"<option value='0' {_selected(str(current_id), '0')}>Общий пул</option>")
+        else:
+            options.append(f"<option value='' {_selected(str(current_id), '0')}>Без проекта</option>")
+        for project in projects:
+            value = str(project["id"])
+            label = f'{project["name"]} ({project["count"]} web)'
+            options.append(f"<option value='{escape(value)}' {_selected(str(current_id), value)}>{escape(label)}</option>")
+        return "".join(options)
+
+    def card(item) -> str:
+        score = int(item.lead_score or 0)
+        score_tone = "hot" if score >= 70 else "warm" if score >= 45 else "cold"
+        title = escape(item.person_name or item.title or "Профиль / кандидат")
+        role = escape(item.role_title or "роль не определена")
+        company = escape(item.company_name or "компания не определена")
+        inn = escape(item.company_inn or "")
+        legal = escape(item.company_legal_name or "")
+        matched = escape(item.matched_web_title or item.matched_web_domain or "")
+        matched_domain = escape(item.matched_web_domain or "")
+        url = escape(item.profile_url or item.source_url or "#")
+        why = escape(item.why_relevant or "").replace("\n", "<br>")
+        pain = escape(item.pain_detected or "")
+        angle = escape(item.outreach_angle or "")
+        opener = escape(item.opener or "")
+        snippet = escape(_short(item.snippet or "", 260))
+        status_value = escape(item.status or "new")
+        return f"""
+        <article class="lead-card">
+          <div class="lead-main">
+            <div class="lead-topline">
+              <div>
+                <a class="lead-title" href="{url}" target="_blank" rel="noreferrer">{title}</a>
+                <div class="domain">{role} · {company}</div>
+              </div>
+              <div class="score {score_tone}">{score}</div>
+            </div>
+            <div class="badges">
+              {badge(item.source or "tenchat")}
+              {badge(item.lead_fit or "signal")}
+              {badge(item.cjm_stage or "manual_check")}
+              {badge("ИНН есть", "ok") if inn else badge("ИНН не найден")}
+              {badge("связан с web", "ok") if matched else ""}
+              {badge("score 70+", "ok") if score >= 70 else ""}
+            </div>
+            <div class="identity-row">
+              <span><b>ИНН:</b> {inn or "не найден"}</span>
+              <span><b>Юр. лицо:</b> {legal or "не найдено"}</span>
+              <span><b>Web:</b> {matched or "не привязан"} {f"({matched_domain})" if matched_domain and matched_domain != matched else ""}</span>
+            </div>
+            <div class="site-check">
+              <b>Почему такой рейтинг</b>
+              <span>{why or "нужна ручная проверка"}</span>
+            </div>
+            <div class="columns">
+              <section><h3>Контекст</h3><p>{pain}</p></section>
+              <section><h3>Заход</h3><p>{angle}</p></section>
+              <section><h3>Фрагмент</h3><p>{snippet}</p></section>
+            </div>
+            <details>
+              <summary>Черновик первого сообщения</summary>
+              <p>{opener}</p>
+            </details>
+          </div>
+          <aside class="lead-side">
+            <form method="post" action="/people-leads/{item.id}/crm">
+              <label>Статус
+                <select name="status">
+                  <option value="new" {_selected(status_value, "new")}>Новый</option>
+                  <option value="reviewed" {_selected(status_value, "reviewed")}>Проверил</option>
+                  <option value="contacted" {_selected(status_value, "contacted")}>Написал</option>
+                  <option value="replied" {_selected(status_value, "replied")}>Ответил</option>
+                  <option value="dead" {_selected(status_value, "dead")}>Архив</option>
+                </select>
+              </label>
+              <label>Ответственный <input name="owner" value="{escape(item.owner or '')}"></label>
+              <label>Комментарий <textarea name="comment">{escape(item.comment or '')}</textarea></label>
+              <button class="primary-btn" type="submit">Сохранить</button>
+            </form>
+          </aside>
+        </article>
+        """
+
+    result = people_job.get("last_result") or {}
+    if people_job.get("running"):
+        job_text = "Идет поиск людей в TenChat..."
+    elif people_job.get("last_error"):
+        job_text = f"Ошибка: {people_job['last_error']}"
+    elif result and "deleted" in result:
+        job_text = f"Очищено связей/лидов: {result.get('deleted', 0)}."
+    elif result:
+        job_text = (
+            f"Последний сбор: {result.get('created', 0)} новых, {result.get('updated', 0)} обновлено, "
+            f"{result.get('kept', 0)} оставлено из {result.get('candidates', 0)} кандидатов. "
+            f"Проект: {result.get('project_name') or 'общий пул'}. Завершен: {people_job.get('last_finished_at')}"
+        )
+    else:
+        job_text = "TenChat-поиск еще не запускался."
+
+    query_params = {"status": status, "min_score": min_score, "q": q, "project_id": selected_project_id, "per_page": per_page}
+    prev_params = {**query_params, "page": max(1, page - 1)}
+    next_params = {**query_params, "page": page + 1}
+    cards = "".join(card(item) for item in items) or "<div class='empty'>Под эти фильтры людей пока нет.</div>"
+    selected_project_title = "Общий пул" if not selected_project_id else (selected_project.name if selected_project else "Проект")
+
+    return f"""
+    <!doctype html>
+    <html lang="ru">
+    <head>
+      <meta charset="utf-8" />
+      <meta name="viewport" content="width=device-width, initial-scale=1" />
+      <title>TenChat People ICP</title>
+      <style>
+        :root {{ --bg:#eef3f7; --panel:#fff; --text:#0f172a; --muted:#64748b; --line:#d8e1ea; --blue:#2563eb; --green:#059669; }}
+        * {{ box-sizing:border-box; }}
+        body {{ margin:0; background:var(--bg); color:var(--text); font:14px/1.45 Inter, -apple-system, BlinkMacSystemFont, "Segoe UI", Arial, sans-serif; }}
+        .page {{ max-width:1280px; margin:0 auto; padding:24px 22px 56px; }}
+        a {{ color:inherit; text-decoration:none; }}
+        h1 {{ margin:0; font-size:30px; letter-spacing:0; }}
+        h3 {{ margin:0 0 6px; font-size:12px; color:var(--muted); text-transform:uppercase; }}
+        p {{ margin:0; }}
+        .topbar {{ display:flex; justify-content:space-between; gap:18px; align-items:flex-start; margin-bottom:16px; }}
+        .subtitle {{ color:var(--muted); max-width:760px; margin-top:6px; }}
+        .nav, .actions {{ display:flex; flex-wrap:wrap; gap:8px; justify-content:flex-end; }}
+        .nav-pill, .link-btn, .primary-btn, .danger-btn {{ min-height:36px; display:inline-flex; align-items:center; justify-content:center; border-radius:7px; padding:0 12px; border:1px solid var(--line); background:#fff; cursor:pointer; }}
+        .nav-pill.active, .primary-btn {{ background:var(--blue); border-color:var(--blue); color:#fff; font-weight:700; }}
+        .danger-btn {{ border-color:#fecaca; color:#b91c1c; }}
+        .layout {{ display:grid; grid-template-columns:320px minmax(0, 1fr); gap:14px; align-items:start; }}
+        .sidebar {{ position:sticky; top:14px; display:grid; gap:10px; }}
+        .metrics {{ display:grid; grid-template-columns:repeat(4, minmax(0, 1fr)); gap:8px; margin-bottom:10px; }}
+        .metric, .panel, .lead-card, .empty {{ background:#fff; border:1px solid var(--line); border-radius:8px; }}
+        .metric {{ padding:10px 12px; min-height:68px; }}
+        .metric b {{ display:block; font-size:22px; }}
+        .metric span, .domain {{ color:var(--muted); }}
+        .panel {{ padding:12px; margin-bottom:10px; }}
+        .side-form {{ display:grid; gap:10px; }}
+        .inline-form {{ display:grid; grid-template-columns:1fr auto; gap:8px; align-items:end; }}
+        label {{ display:grid; gap:5px; color:var(--muted); font-size:12px; }}
+        input, select, textarea {{ width:100%; border:1px solid #cbd5e1; border-radius:7px; padding:9px 10px; background:#fff; color:#0f172a; font:inherit; }}
+        textarea {{ min-height:68px; resize:vertical; }}
+        .hint {{ color:var(--muted); font-size:12px; margin:8px 0; }}
+        .query-details {{ margin-top:10px; border:1px solid var(--line); border-radius:8px; padding:10px; background:#f8fafc; }}
+        .query-details summary {{ border:0; padding:0; color:var(--blue); }}
+        .preset-preview {{ margin-top:8px; color:var(--muted); font-size:12px; white-space:pre-wrap; }}
+        .panel-head {{ display:flex; justify-content:space-between; gap:10px; align-items:center; margin-bottom:10px; }}
+        .job {{ color:#059669; margin-top:10px; }}
+        .filters {{ display:grid; grid-template-columns:120px 130px 1fr 120px; gap:10px; align-items:end; border-top:1px solid var(--line); padding-top:12px; }}
+        .pager {{ display:flex; justify-content:space-between; align-items:center; color:var(--muted); margin:10px 0; }}
+        .pager-actions {{ display:flex; gap:8px; }}
+        .lead-card {{ display:grid; grid-template-columns:minmax(0,1fr) 230px; gap:12px; padding:12px; margin-bottom:10px; }}
+        .lead-topline {{ display:flex; justify-content:space-between; gap:12px; }}
+        .lead-title {{ display:block; font-size:20px; font-weight:800; }}
+        .score {{ width:52px; height:52px; display:grid; place-items:center; border-radius:8px; font-size:22px; font-weight:900; background:#e2e8f0; color:#475569; flex:0 0 auto; }}
+        .score.hot {{ background:#dcfce7; color:#047857; }}
+        .score.warm {{ background:#fef3c7; color:#92400e; }}
+        .badges {{ display:flex; flex-wrap:wrap; gap:6px; margin:10px 0; }}
+        .badge {{ border:1px solid var(--line); border-radius:999px; padding:4px 9px; font-size:12px; color:#334155; }}
+        .badge.ok {{ background:#ecfdf5; border-color:#bbf7d0; color:#047857; }}
+        .identity-row {{ display:grid; grid-template-columns:repeat(3, minmax(0, 1fr)); gap:8px; color:#334155; margin:8px 0; }}
+        .identity-row span {{ padding:7px 8px; border:1px solid var(--line); border-radius:7px; background:#f8fafc; overflow-wrap:anywhere; }}
+        .site-check {{ border:1px solid #bbf7d0; background:#f0fdf4; color:#065f46; border-radius:7px; padding:8px 10px; margin:8px 0 12px; display:grid; gap:2px; }}
+        .columns {{ display:grid; grid-template-columns:1fr 1fr; gap:12px; border-top:1px solid var(--line); padding-top:10px; }}
+        .columns section:last-child {{ display:none; }}
+        details {{ margin-top:12px; border-top:1px solid var(--line); padding-top:10px; color:#334155; }}
+        summary {{ cursor:pointer; color:var(--blue); font-weight:700; }}
+        .lead-side {{ border-left:1px solid var(--line); padding-left:14px; }}
+        .lead-side form {{ display:grid; gap:8px; }}
+        .empty {{ padding:28px; color:var(--muted); }}
+        @media (max-width:980px) {{ .topbar, .lead-card, .layout {{ display:block; }} .sidebar {{ position:static; }} .nav {{ justify-content:flex-start; margin-top:12px; }} .metrics, .filters, .columns, .identity-row {{ grid-template-columns:1fr; }} .lead-side {{ border-left:0; border-top:1px solid var(--line); padding:12px 0 0; margin-top:12px; }} }}
+      </style>
+    </head>
+    <body>
+      <main class="page">
+        <div class="topbar">
+          <div>
+            <h1>TenChat люди</h1>
+            <div class="subtitle">Ищем не статьи, а потенциальных ЛПР: собственников, директоров, маркетинг и e-commerce у компаний из ICP. ИНН подтягиваем из web-базы или из открытого текста профиля.</div>
+          </div>
+          <nav class="nav">
+            {nav_button("Web", "/web-leads")}
+            {nav_button("TenChat", "/people-leads", True)}
+            {nav_button("Telegram", "/telegram-signals")}
+          </nav>
+        </div>
+        <div class="layout">
+          <aside class="sidebar">
+            <section class="panel">
+              <div class="panel-head"><b>{escape(selected_project_title)}</b></div>
+              <form id="new-people-project-form" method="post" action="/people-leads/projects" class="inline-form">
+                <label>Новый проект <input name="project_name" placeholder="Например: Текстиль июнь"></label>
+                <button class="primary-btn" type="submit">Создать</button>
+              </form>
+              <form id="people-search-form" method="post" action="/people-leads/search" class="side-form">
+                <label>Проект для поиска
+                  <select name="project_id">{project_options(search_project_id, include_all=False)}</select>
+                </label>
+                <label>Сценарий
+                  <select name="preset">{preset_options}</select>
+                </label>
+                <label>Компаний из web-проекта <input type="number" name="project_limit" min="1" max="80" value="{form_project_limit}"></label>
+                <label>Лимит TenChat-кандидатов <input type="number" name="total_limit" min="5" max="120" value="{form_total_limit}"></label>
+                <label>Свои запросы
+                  <textarea name="custom_queries" placeholder="По одному запросу на строку. Можно без site:tenchat.ru">{escape(form_custom_queries)}</textarea>
+                </label>
+                <button class="primary-btn" type="submit">Найти людей</button>
+              </form>
+              <details class="query-details">
+                <summary>Шаблон текущего сценария</summary>
+                <div class="preset-preview">{escape(preset_queries)}</div>
+              </details>
+              <div class="hint">Лучший режим: сначала собрать Web ICP проект, потом тут выбрать его и искать ЛПР по найденным компаниям.</div>
+              <form method="post" action="/people-leads/clear?project_id={selected_project_id}" onsubmit="return confirm('Очистить выбранный TenChat-срез?')">
+                <button class="danger-btn" type="submit">{'Очистить проект' if selected_project_id else 'Очистить всю TenChat-базу'}</button>
+              </form>
+              <div class="job" id="people-job-text">{escape(job_text)}</div>
+            </section>
+          </aside>
+          <section>
+            <section class="metrics">
+              {metric("вся база", count_social_leads())}
+              {metric("в проекте", count_social_leads(project_id=selected_project_id or None))}
+              {metric("score 70+ проект", count_social_leads(min_score=70, project_id=selected_project_id or None))}
+              {metric("с ИНН проект", count_social_leads_with_inn(project_id=selected_project_id or None))}
+            </section>
+            <section class="panel">
+              <div class="panel-head">
+                <b>Выгрузки и фильтр</b>
+                <div class="actions">
+                  <a class="link-btn" href="/people-leads/export">Excel: вся база</a>
+                  <a class="primary-btn" href="/people-leads/export?project_id={selected_project_id}">Excel: проект</a>
+                </div>
+              </div>
+              <form method="get" action="/people-leads" class="filters">
+                <input type="hidden" name="project_id" value="{selected_project_id}">
+                <label>Score от <input type="number" name="min_score" value="{int(min_score or 0)}" min="0" max="100"></label>
+                <label>Статус <select name="status">
+                  <option value="">Все</option>
+                  <option value="new" {_selected(status, "new")}>Новые</option>
+                  <option value="reviewed" {_selected(status, "reviewed")}>Проверил</option>
+                  <option value="contacted" {_selected(status, "contacted")}>Написал</option>
+                  <option value="replied" {_selected(status, "replied")}>Ответил</option>
+                  <option value="dead" {_selected(status, "dead")}>Архив</option>
+                </select></label>
+                <label>Поиск <input name="q" value="{escape(q or '')}" placeholder="человек, роль, компания, ИНН, причина"></label>
+                <button class="primary-btn" type="submit">Фильтр</button>
+              </form>
+            </section>
+            <div class="pager">
+              <span>Страница {page}. Показано {len(items)}.</span>
+              <div class="pager-actions">
+                <a class="link-btn" href="/people-leads?{escape(urlencode(prev_params))}">Назад</a>
+                <a class="link-btn" href="/people-leads?{escape(urlencode(next_params))}">Вперед</a>
+              </div>
+            </div>
+            {cards}
+          </section>
+        </div>
+      </main>
+      <script>
+        let peopleJobWasRunning = false;
+        async function pollPeopleJob() {{
+          try {{
+            const response = await fetch('/people-leads/job-status', {{ cache: 'no-store' }});
+            const job = await response.json();
+            if (job.running) {{
+              peopleJobWasRunning = true;
+              const el = document.getElementById('people-job-text');
+              if (el) el.textContent = 'Идет поиск людей в TenChat...';
+              setTimeout(pollPeopleJob, 2500);
+              return;
+            }}
+            if (peopleJobWasRunning) window.location.reload();
+          }} catch (e) {{}}
+        }}
+        pollPeopleJob();
+      </script>
+    </body>
+    </html>
+    """
+
+
 @app.get("/people-leads", response_class=HTMLResponse)
 def people_leads_dashboard(
     request: Request,
     status: str = "",
     min_score: int = 0,
     q: str = "",
+    project_id: int = 0,
     page: int = 1,
     per_page: int = 40,
 ):
+    return _people_leads_dashboard_v2(
+        request=request,
+        status=status,
+        min_score=min_score,
+        q=q,
+        project_id=project_id,
+        page=page,
+        per_page=per_page,
+    )
     page = max(1, page)
     per_page = max(10, min(100, per_page))
     offset = (page - 1) * per_page

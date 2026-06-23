@@ -7,27 +7,32 @@ from openpyxl import Workbook
 from openpyxl.styles import Font
 from openpyxl.utils import get_column_letter
 
-from storage.social_lead_repository import get_social_leads
+from storage.social_lead_repository import get_project_names_for_social_leads, get_social_leads
 
 
-def export_social_leads_to_xlsx() -> Path:
-    items = get_social_leads(limit=10000)
+def export_social_leads_to_xlsx(project_id: int | None = None) -> Path:
+    items = get_social_leads(limit=10000, project_id=project_id)
+    project_names = get_project_names_for_social_leads([item.id for item in items])
+
     wb = Workbook()
     ws = wb.active
     ws.title = "people_icp"
     headers = [
+        "проект",
         "score",
         "статус",
-        "источник",
         "человек",
         "роль",
-        "компания",
-        "профиль",
-        "пост/страница",
+        "компания TenChat",
+        "ИНН",
+        "юр. название",
+        "web-компания",
+        "web-сайт",
+        "профиль TenChat",
         "поисковый запрос",
-        "почему подходит",
+        "почему рейтинг",
         "ICP",
-        "боль",
+        "контекст / боль",
         "CJM",
         "заход",
         "черновик сообщения",
@@ -36,17 +41,21 @@ def export_social_leads_to_xlsx() -> Path:
     ws.append(headers)
     for cell in ws[1]:
         cell.font = Font(bold=True)
+
     for item in items:
         ws.append(
             [
+                project_names.get(item.id, ""),
                 int(item.lead_score or 0),
                 item.status or "",
-                item.source or "",
                 item.person_name or "",
                 item.role_title or "",
                 item.company_name or "",
-                item.profile_url or "",
-                item.post_url or item.source_url or "",
+                item.company_inn or "",
+                item.company_legal_name or "",
+                item.matched_web_title or "",
+                item.matched_web_domain or "",
+                item.profile_url or item.source_url or "",
                 item.source_query or "",
                 item.why_relevant or "",
                 item.likely_icp or "",
@@ -57,10 +66,12 @@ def export_social_leads_to_xlsx() -> Path:
                 item.comment or "",
             ]
         )
+
     _autosize(ws)
     export_dir = Path("exports")
     export_dir.mkdir(exist_ok=True)
-    file_path = export_dir / f"people_icp_{datetime.utcnow().strftime('%Y%m%d_%H%M%S')}.xlsx"
+    scope = f"project_{project_id}_" if project_id else "all_"
+    file_path = export_dir / f"people_icp_{scope}{datetime.utcnow().strftime('%Y%m%d_%H%M%S')}.xlsx"
     wb.save(file_path)
     return file_path
 
@@ -70,4 +81,4 @@ def _autosize(ws) -> None:
         max_len = 0
         for cell in column_cells:
             max_len = max(max_len, len(str(cell.value or "")))
-        ws.column_dimensions[get_column_letter(col_idx)].width = min(max(max_len + 2, 12), 58)
+        ws.column_dimensions[get_column_letter(col_idx)].width = min(max(max_len + 2, 12), 62)
