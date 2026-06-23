@@ -5,7 +5,7 @@ import logging
 import re
 from dataclasses import dataclass
 from html import unescape
-from urllib.parse import urlparse
+from urllib.parse import urljoin, urlparse
 
 import httpx
 from bs4 import BeautifulSoup
@@ -267,7 +267,8 @@ ARTICLE_MARKERS = [
     "квиз",
 ]
 
-INN_PATTERN = re.compile(r"(?:инн|ИНН)[^\d]{0,12}(\d{10}|\d{12})")
+INN_PATTERN = re.compile(r"(?:инн|ИНН)[^\d]{0,20}(\d{10}|\d{12})", re.IGNORECASE)
+OGRN_PATTERN = re.compile(r"(?:огрн|ОГРН)[^\d]{0,20}(\d{13}|\d{15})", re.IGNORECASE)
 
 
 @dataclass(frozen=True)
@@ -314,7 +315,18 @@ async def collect_people_leads(
         async with semaphore:
             query_item = query_map.get(str(candidate.get("source_query") or ""))
             page = await _fetch_public_page(candidate.get("url"))
-            item = _build_social_lead(candidate, page, query_item=query_item, project_id=project_id)
+            company_page = {}
+            company_url = _best_company_url(page)
+            if company_url:
+                company_page = await _fetch_public_page(company_url)
+            item = _build_social_lead(
+                candidate,
+                page,
+                company_page=company_page,
+                company_url=company_url,
+                query_item=query_item,
+                project_id=project_id,
+            )
             if not _is_actionable_people_candidate(item):
                 return None
             return item
@@ -401,26 +413,60 @@ async def _fetch_public_page(url: str | None) -> dict:
         logger.info("[tenchat_finder] fetch_failed url=%s error=%s", url, exc)
         return {}
 
-    soup = BeautifulSoup(response.text, "lxml")
+    raw_html = response.text
+    soup = BeautifulSoup(raw_html, "lxml")
     for tag in soup(["script", "style", "noscript"]):
         tag.decompose()
     title = (soup.title.string if soup.title and soup.title.string else "")[:300]
     h1 = " ".join(tag.get_text(" ", strip=True) for tag in soup.find_all("h1")[:2])
     text = " ".join(soup.get_text(" ", strip=True).split())
-    return {"title": unescape(title), "h1": h1, "text": unescape(text[:18000])}
+    company_urls = _extract_company_urls(soup, str(response.url))
+    return {
+        "url": str(response.url),
+        "title": unescape(title),
+        "h1": h1,
+        "text": unescape(text[:70000]),
+        "full_text": unescape(text),
+        "company_urls": company_urls,
+        "company_inn": _extract_inn(raw_html) or _extract_inn(text),
+        "company_ogrn": _extract_ogrn(raw_html) or _extract_ogrn(text),
+        "company_legal_name": _extract_legal_name(text),
+    }
 
 
-def _build_social_lead(candidate: dict, page: dict, *, query_item: QueryItem | None, project_id: int | None) -> dict:
+def _build_social_lead(
+    candidate: dict,
+    page: dict,
+    *,
+    company_page: dict | None = None,
+    company_url: str | None = None,
+    query_item: QueryItem | None,
+    project_id: int | None,
+) -> dict:
     url = normalize_url(candidate.get("url")) or candidate.get("url") or ""
     title = page.get("title") or candidate.get("title") or ""
     snippet = candidate.get("body") or ""
     text = page.get("text") or " ".join([title, snippet])
+    company_page = company_page or {}
+    company_text = company_page.get("full_text") or company_page.get("text") or ""
     h1 = page.get("h1") or ""
-    full_text = " ".join([title, h1, snippet, text]).lower()
+    full_text = " ".join([title, h1, snippet, text, company_text]).lower()
     person_name, role_title = _parse_person_and_role(title, h1)
     company_name = _extract_company(full_text) or (query_item.web_company_name if query_item else None)
-    company_inn = _extract_inn(full_text) or (query_item.web_inn if query_item else None)
-    company_legal_name = (query_item.web_legal_name if query_item else None) or _extract_legal_name(full_text)
+    company_inn = (
+        company_page.get("company_inn")
+        or page.get("company_inn")
+        or _extract_inn(full_text)
+        or (query_item.web_inn if query_item else None)
+    )
+    company_ogrn = company_page.get("company_ogrn") or page.get("company_ogrn") or _extract_ogrn(full_text)
+    company_legal_name = (
+        company_page.get("company_legal_name")
+        or page.get("company_legal_name")
+        or (query_item.web_legal_name if query_item else None)
+        or _extract_legal_name(full_text)
+    )
+    company_name = company_name or company_legal_name
     profile_url, post_url = _split_tenchat_url(url)
     classification = _classify_people_lead(
         full_text,
@@ -443,7 +489,9 @@ def _build_social_lead(candidate: dict, page: dict, *, query_item: QueryItem | N
         "role_title": role_title,
         "company_name": company_name,
         "company_inn": company_inn,
+        "company_ogrn": company_ogrn,
         "company_legal_name": company_legal_name,
+        "company_url": company_url,
         "matched_web_lead_id": query_item.web_lead_id if query_item else None,
         "matched_web_domain": query_item.web_domain if query_item else None,
         "matched_web_title": query_item.web_title if query_item else None,
@@ -530,20 +578,46 @@ def _category_terms_for_lead(lead: Lead) -> list[str]:
     return terms
 
 
-def _parse_person_and_role(title: str, h1: str) -> tuple[str | None, str | None]:
-    source = " ".join(part for part in [h1, title] if part).strip()
-    source = re.sub(r"\s+", " ", source)
-    source = re.sub(r"\s*\|\s*TenChat.*$", "", source, flags=re.IGNORECASE)
-    source = re.sub(r"\s*—\s*TenChat.*$", "", source, flags=re.IGNORECASE)
+def _extract_company_urls(soup: BeautifulSoup, base_url: str) -> list[str]:
+    urls: list[str] = []
+    seen: set[str] = set()
+    for link in soup.find_all("a", href=True):
+        href = str(link.get("href") or "")
+        text = " ".join(link.get_text(" ", strip=True).split()).lower()
+        parsed_path = urlparse(href).path.strip("/")
+        first_path_part = parsed_path.split("/", 1)[0] if parsed_path else ""
+        is_long_numeric_page = bool(re.fullmatch(r"\d{10,15}", first_path_part))
+        has_company_text = any(marker in text for marker in ["ооо", "ао ", "пао", "ип ", "компани", "компания"])
+        if not is_long_numeric_page or not has_company_text:
+            continue
+        absolute = normalize_url(urljoin(base_url, f"/{first_path_part}"))
+        if absolute and absolute not in seen:
+            seen.add(absolute)
+            urls.append(absolute)
+    return urls[:5]
 
+
+def _best_company_url(page: dict) -> str | None:
+    urls = page.get("company_urls") or []
+    if not urls:
+        return None
+    return str(urls[0])
+
+
+def _parse_person_and_role(title: str, h1: str) -> tuple[str | None, str | None]:
+    sources = [title, h1, " ".join(part for part in [h1, title] if part).strip()]
     patterns = [
-        r"^(?P<name>[А-ЯЁA-Z][^—|,]{3,80}),?\s*\d{0,2}\s*(?:лет|года|год)?\s*[—-]\s*(?P<role>[^|]{3,180})",
-        r"^(?P<name>[А-ЯЁA-Z][^—|]{3,80})\s*[—-]\s*(?P<role>[^|]{3,180})",
+        r"^(?P<name>[А-ЯЁA-Z][^—|]{3,100}?)(?:,\s*[^—|,]{2,40})?,?\s*\d{1,2}\s*(?:лет|года|год)?\s*[—-]\s*(?P<role>[^|]{3,180})",
+        r"^(?P<name>[А-ЯЁA-Z][^—|]{3,100})\s*[—-]\s*(?P<role>[^|]{3,180})",
     ]
-    for pattern in patterns:
-        match = re.search(pattern, source)
-        if match:
-            return _clean_value(match.group("name")), _clean_value(match.group("role"))
+    for source in sources:
+        source = re.sub(r"\s+", " ", source or "").strip()
+        source = re.sub(r"\s*\|\s*TenChat.*$", "", source, flags=re.IGNORECASE)
+        source = re.sub(r"\s*—\s*TenChat.*$", "", source, flags=re.IGNORECASE)
+        for pattern in patterns:
+            match = re.search(pattern, source)
+            if match:
+                return _clean_person_name(match.group("name")), _clean_value(match.group("role"))
     if h1 and _looks_like_person_name(h1):
         return _clean_value(h1), None
     return None, None
@@ -564,14 +638,29 @@ def _extract_company(text: str) -> str | None:
 
 
 def _extract_legal_name(text: str) -> str | None:
-    match = re.search(r"\b(ооо|ао|пао|ип)\s+[«\"]?([^,.;\n]{3,90})", text, flags=re.IGNORECASE)
-    if not match:
-        return None
-    return _clean_value(" ".join(match.groups()))
+    quoted = re.search(r"\b(ооо|ао|пао|ип)\s+[«\"]([^»\"]{3,140})[»\"]", text, flags=re.IGNORECASE)
+    if quoted:
+        form = quoted.group(1).upper()
+        name = re.sub(r"\s+", " ", quoted.group(2)).strip()
+        return f'{form} "{name}"'
+
+    plain = re.search(
+        r"\b(ооо|ао|пао|ип)\s+([^,.;\n]{3,120}?)(?=\s+(?:основной|дата|официальная|отзывы|—|-)|[,.;\n]|$)",
+        text,
+        flags=re.IGNORECASE,
+    )
+    if plain:
+        return _clean_value(" ".join(plain.groups()))
+    return None
 
 
 def _extract_inn(text: str) -> str | None:
     match = INN_PATTERN.search(text)
+    return match.group(1) if match else None
+
+
+def _extract_ogrn(text: str) -> str | None:
+    match = OGRN_PATTERN.search(text)
     return match.group(1) if match else None
 
 
@@ -773,3 +862,14 @@ def _clean_value(value: str | None) -> str | None:
         return None
     cleaned = re.sub(r"\s+", " ", value).strip(" -—|,.;:«»\"'")
     return cleaned or None
+
+
+def _clean_person_name(value: str | None) -> str | None:
+    cleaned = _clean_value(value)
+    if not cleaned:
+        return None
+    cleaned = cleaned.split(",", 1)[0]
+    parts = cleaned.split()
+    if len(parts) >= 4 and parts[:2] == parts[2:4]:
+        parts = parts[:2] + parts[4:]
+    return " ".join(parts[:3]) or None

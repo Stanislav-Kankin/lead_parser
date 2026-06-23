@@ -153,7 +153,9 @@ SEARCH_PROFILE_REQUIRED_COLUMNS = {
 
 SOCIAL_LEAD_REQUIRED_COLUMNS = {
     "company_inn": "ALTER TABLE social_leads ADD COLUMN company_inn VARCHAR",
+    "company_ogrn": "ALTER TABLE social_leads ADD COLUMN company_ogrn VARCHAR",
     "company_legal_name": "ALTER TABLE social_leads ADD COLUMN company_legal_name VARCHAR",
+    "company_url": "ALTER TABLE social_leads ADD COLUMN company_url VARCHAR",
     "matched_web_lead_id": "ALTER TABLE social_leads ADD COLUMN matched_web_lead_id INTEGER",
     "matched_web_domain": "ALTER TABLE social_leads ADD COLUMN matched_web_domain VARCHAR",
     "matched_web_title": "ALTER TABLE social_leads ADD COLUMN matched_web_title VARCHAR",

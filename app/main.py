@@ -602,7 +602,9 @@ def _people_leads_dashboard_v2(
         role = escape(item.role_title or "роль не определена")
         company = escape(item.company_name or "компания не определена")
         inn = escape(item.company_inn or "")
+        ogrn = escape(getattr(item, "company_ogrn", "") or "")
         legal = escape(item.company_legal_name or "")
+        company_url = escape(getattr(item, "company_url", "") or "")
         matched = escape(item.matched_web_title or item.matched_web_domain or "")
         matched_domain = escape(item.matched_web_domain or "")
         url = escape(item.profile_url or item.source_url or "#")
@@ -632,7 +634,8 @@ def _people_leads_dashboard_v2(
             </div>
             <div class="identity-row">
               <span><b>ИНН:</b> {inn or "не найден"}</span>
-              <span><b>Юр. лицо:</b> {legal or "не найдено"}</span>
+              <span><b>ОГРН:</b> {ogrn or "не найден"}</span>
+              <span><b>Юр. лицо:</b> {f'<a href="{company_url}" target="_blank" rel="noreferrer">{legal}</a>' if company_url and legal else (legal or "не найдено")}</span>
               <span><b>Web:</b> {matched or "не привязан"} {f"({matched_domain})" if matched_domain and matched_domain != matched else ""}</span>
             </div>
             <div class="site-check">
@@ -749,7 +752,7 @@ def _people_leads_dashboard_v2(
         .badges {{ display:flex; flex-wrap:wrap; gap:6px; margin:10px 0; }}
         .badge {{ border:1px solid var(--line); border-radius:999px; padding:4px 9px; font-size:12px; color:#334155; }}
         .badge.ok {{ background:#ecfdf5; border-color:#bbf7d0; color:#047857; }}
-        .identity-row {{ display:grid; grid-template-columns:repeat(3, minmax(0, 1fr)); gap:8px; color:#334155; margin:8px 0; }}
+        .identity-row {{ display:grid; grid-template-columns:repeat(4, minmax(0, 1fr)); gap:8px; color:#334155; margin:8px 0; }}
         .identity-row span {{ padding:7px 8px; border:1px solid var(--line); border-radius:7px; background:#f8fafc; overflow-wrap:anywhere; }}
         .site-check {{ border:1px solid #bbf7d0; background:#f0fdf4; color:#065f46; border-radius:7px; padding:8px 10px; margin:8px 0 12px; display:grid; gap:2px; }}
         .columns {{ display:grid; grid-template-columns:1fr 1fr; gap:12px; border-top:1px solid var(--line); padding-top:10px; }}
