@@ -152,12 +152,28 @@ AD_CHANNEL_SIGNALS = {
     "лиды": 8,
 }
 
+SELF_PROMO_SIGNALS = {
+    "ищу клиентов": -45,
+    "ищу заказы": -45,
+    "беру проекты": -35,
+    "оказываю услуги": -35,
+    "оказываем услуги": -35,
+    "настраиваю рекламу": -35,
+    "настрою рекламу": -35,
+    "веду рекламу": -30,
+    "привожу лиды": -30,
+    "помогаю бизнесу": -25,
+    "эксперт по рекламе": -25,
+    "директолог": -10,
+}
+
 NEGATIVE_SIGNALS = {
     "маркетинговое агентство": -25,
     "мы агентство": -30,
     "наше агентство": -30,
     "рекламное агентство": -25,
     "оказываем услуги": -25,
+    "оказываю услуги": -25,
     "наши услуги": -20,
     "smm": -15,
     "таргетолог": -18,
@@ -171,6 +187,14 @@ NEGATIVE_SIGNALS = {
     "вакансии": -12,
     "ищу работу": -18,
 }
+
+REQUEST_PATTERNS: list[tuple[str, int, str]] = [
+    (r"\bищ(?:у|ем)\b.{0,90}(?:агентств|подрядчик|директолог|маркетолог|специалист|реклам|директ|рся|трафик|performance|перфоманс)", 30, "ищет подрядчика/специалиста"),
+    (r"\bнуж(?:ен|на|ны)\b.{0,90}(?:агентств|подрядчик|директолог|маркетолог|специалист|реклам|директ|рся|трафик|performance|перфоманс)", 28, "нужен подрядчик/канал"),
+    (r"(?:посоветуйте|порекомендуйте|подскажите).{0,90}(?:агентств|подрядчик|директолог|маркетолог|специалист|реклам|директ|рся|трафик)", 32, "просит рекомендацию"),
+    (r"(?:кто умеет|кто может|кто настроит|кто ведет).{0,90}(?:директ|рся|реклам|трафик|маркетплейс)", 32, "ищет кто сделает"),
+    (r"(?:хотим|планируем|надо|нужно).{0,70}(?:запустить|настроить|вести|проверить).{0,70}(?:реклам|директ|рся|трафик)", 24, "планирует запуск рекламы"),
+]
 
 
 def build_people_queries(custom_queries: str | None = None, preset: str = DEFAULT_TENCHAT_PRESET) -> list[str]:
@@ -295,20 +319,20 @@ def _parse_person_and_role(title: str, h1: str) -> tuple[str | None, str | None]
         match = re.search(pattern, source)
         if match:
             return _clean_value(match.group("name")), _clean_value(match.group("role"))
-    if h1 and len(h1) < 90:
+    if h1 and len(h1) < 90 and _looks_like_person_name(h1):
         return _clean_value(h1), None
     return None, None
 
 
 def _extract_company(text: str) -> str | None:
     patterns = [
-        r"(?:в|компания|бренд|производитель)\s+(ооо\s+[«\"]?[^,.;\n]{3,70})",
-        r"(?:в|компания|бренд|производитель)\s+([a-zа-яё0-9][^,.;\n]{3,70})",
+        r"\b(ооо|ао|пао|ип)\s+[«\"]?([^,.;\n]{3,70})",
+        r"(?:в компании|основатель|собственник|директор)\s+([A-ZА-ЯЁ][A-Za-zА-Яа-яЁё0-9 «»\"-]{3,70})",
     ]
     for pattern in patterns:
         match = re.search(pattern, text, flags=re.IGNORECASE)
         if match:
-            value = _clean_value(match.group(1))
+            value = _clean_value(" ".join(group for group in match.groups() if group))
             if value and not any(stop in value.lower() for stop in ["tenchat", "маркетинг", "агентство"]):
                 return value[:120]
     return None
@@ -325,16 +349,20 @@ def _classify_people_lead(
     icp_hits = _hits(full_text, ICP_SIGNALS)
     pain_hits = _hits(full_text, PAIN_SIGNALS)
     intent_hits = _hits(full_text, DEMAND_INTENT_SIGNALS)
+    request_hits = _request_hits(full_text)
     channel_hits = _hits(full_text, AD_CHANNEL_SIGNALS)
     negative_hits = _hits(full_text, NEGATIVE_SIGNALS)
+    self_promo_hits = _hits(full_text, SELF_PROMO_SIGNALS)
 
     score = (
-        min(28, sum(weight for _, weight in intent_hits))
+        min(34, sum(weight for _, weight in request_hits))
+        + min(14, sum(weight for _, weight in intent_hits))
         + min(24, sum(weight for _, weight in channel_hits))
         + min(18, sum(weight for _, weight in icp_hits))
         + min(14, sum(weight for _, weight in pain_hits))
         + min(12, sum(weight for _, weight in role_hits))
         + sum(weight for _, weight in negative_hits)
+        + sum(weight for _, weight in self_promo_hits)
     )
     if person_name:
         score += 5
@@ -344,13 +372,13 @@ def _classify_people_lead(
         score += 6
     if icp_hits and pain_hits:
         score += 5
-    if intent_hits and channel_hits:
+    if request_hits and channel_hits:
         score += 12
     if channel_hits and icp_hits:
         score += 8
     if role_hits and (intent_hits or icp_hits):
         score += 5
-    direct_demand = bool(intent_hits and channel_hits)
+    direct_demand = bool(request_hits and channel_hits)
     strategic_demand = bool(channel_hits and icp_hits and pain_hits)
     if not person_name and not role_title:
         score = min(score, 42)
@@ -360,7 +388,9 @@ def _classify_people_lead(
         score = min(score, 34)
     if not icp_hits:
         score -= 6
-    if _looks_like_generic_article(full_text) and not person_name:
+    if _looks_like_generic_article(full_text) and not request_hits:
+        score = 0
+    elif _looks_like_generic_article(full_text) and not person_name:
         score -= 18
     score = max(0, min(100, score))
 
@@ -375,6 +405,8 @@ def _classify_people_lead(
         cjm_stage = "signal_only"
 
     pain_parts = []
+    if request_hits:
+        pain_parts.append("запрос: " + _format_hits(request_hits, 4))
     if intent_hits:
         pain_parts.append("намерение: " + _format_hits(intent_hits, 5))
     if channel_hits:
@@ -386,6 +418,8 @@ def _classify_people_lead(
     why_parts = []
     if role_hits:
         why_parts.append("роль/влияние: " + _format_hits(role_hits, 5))
+    if request_hits:
+        why_parts.append("явный запрос: " + _format_hits(request_hits, 4))
     if intent_hits:
         why_parts.append("прямой спрос: " + _format_hits(intent_hits, 5))
     if channel_hits:
@@ -396,6 +430,8 @@ def _classify_people_lead(
         why_parts.append("боль/триггер: " + _format_hits(pain_hits, 6))
     if negative_hits:
         why_parts.append("минусы: " + _format_hits(negative_hits, 4))
+    if self_promo_hits:
+        why_parts.append("самореклама: " + _format_hits(self_promo_hits, 4))
     why_relevant = "; ".join(why_parts) or "слабый сигнал, нужна ручная проверка"
     outreach_angle = _build_angle(pain_hits, icp_hits, intent_hits, channel_hits)
 
@@ -457,8 +493,56 @@ def _looks_like_generic_article(text: str) -> bool:
         "новости",
         "разбор",
         "кейс",
+        "способ ",
+        "способы ",
+        "по шагам",
+        "через яндекс.директ",
+        "через яндекс директ",
+        "забытый канал",
+        "самый экономичный",
+        "белое продвижение",
+        "оптимизировать рекламу",
+        "реклама в telegram",
+        "реклама в телеграм",
+        "квиз",
     ]
     return any(marker in text[:700] for marker in article_markers)
+
+
+def _request_hits(text: str) -> list[tuple[str, int]]:
+    hits: list[tuple[str, int]] = []
+    for pattern, weight, label in REQUEST_PATTERNS:
+        if re.search(pattern, text, flags=re.IGNORECASE | re.DOTALL):
+            hits.append((label, weight))
+    return hits
+
+
+def _looks_like_person_name(value: str | None) -> bool:
+    if not value:
+        return False
+    cleaned = _clean_value(value) or ""
+    if len(cleaned) > 70:
+        return False
+    lowered = cleaned.lower()
+    if any(
+        marker in lowered
+        for marker in [
+            "реклама",
+            "директ",
+            "маркетплейс",
+            "wildberries",
+            "ozon",
+            "как ",
+            "способ",
+            "квиз",
+            "продвижение",
+        ]
+    ):
+        return False
+    parts = [part for part in re.split(r"\s+", cleaned) if part]
+    if not 2 <= len(parts) <= 3:
+        return False
+    return all(re.match(r"^[А-ЯЁA-Z][а-яёa-z-]{1,30}$", part) for part in parts)
 
 
 def _build_opener(person_name: str | None, role_title: str | None, item: dict) -> str:

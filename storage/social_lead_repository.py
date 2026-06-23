@@ -8,6 +8,20 @@ from sqlalchemy import delete, desc, func, or_, select
 from models.lead import SocialLead
 from storage.db import SessionLocal
 
+ARTICLE_TITLE_MARKERS = [
+    "как ",
+    "способ",
+    "способы",
+    "по шагам",
+    "квиз",
+    "забытый канал",
+    "самый экономичный",
+    "белое продвижение",
+    "оптимизировать рекламу",
+    "реклама в telegram",
+    "реклама в телеграм",
+]
+
 
 def save_social_leads(items: Iterable[dict]) -> dict:
     created = 0
@@ -67,6 +81,8 @@ def get_social_leads(
         stmt = select(SocialLead)
         if people_only:
             stmt = stmt.where(or_(SocialLead.person_name.is_not(None), SocialLead.role_title.is_not(None)))
+            for marker in ARTICLE_TITLE_MARKERS:
+                stmt = stmt.where(or_(SocialLead.title.is_(None), ~SocialLead.title.ilike(f"%{marker}%")))
         if min_score is not None:
             stmt = stmt.where(SocialLead.lead_score >= min_score)
         if status:
@@ -100,6 +116,8 @@ def count_social_leads(
         stmt = select(func.count(SocialLead.id))
         if people_only:
             stmt = stmt.where(or_(SocialLead.person_name.is_not(None), SocialLead.role_title.is_not(None)))
+            for marker in ARTICLE_TITLE_MARKERS:
+                stmt = stmt.where(or_(SocialLead.title.is_(None), ~SocialLead.title.ilike(f"%{marker}%")))
         if min_score is not None:
             stmt = stmt.where(SocialLead.lead_score >= min_score)
         if status:

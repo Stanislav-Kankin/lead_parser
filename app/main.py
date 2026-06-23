@@ -651,6 +651,7 @@ def people_leads_dashboard(
         .query-details {{ margin-top:10px; border:1px solid var(--line); border-radius:8px; padding:10px; background:#f8fafc; }}
         .query-details summary {{ border:0; padding:0; color:var(--blue); }}
         .preset-preview {{ margin-top:8px; color:var(--muted); font-size:12px; white-space:pre-wrap; }}
+        .panel-head {{ display:flex; justify-content:space-between; gap:10px; align-items:center; margin-bottom:10px; }}
         .job {{ color:#059669; margin-top:10px; }}
         .filters {{ display:grid; grid-template-columns:120px 120px 1fr 120px; gap:10px; align-items:end; border-bottom:1px solid var(--line); padding-bottom:12px; margin-bottom:12px; }}
         .pager {{ display:flex; justify-content:space-between; align-items:center; color:var(--muted); margin:10px 0; }}
@@ -695,6 +696,10 @@ def people_leads_dashboard(
           {metric("новые", count_social_leads(status="new"))}
         </section>
         <section class="panel">
+          <div class="panel-head">
+            <b>Поиск спроса</b>
+            <a class="primary-btn" href="/people-leads/export">Скачать Excel</a>
+          </div>
           <form id="people-search-form" method="post" action="/people-leads/search" class="search-form">
             <label>Сценарий поиска
               <select name="preset">{preset_options}</select>
@@ -711,7 +716,6 @@ def people_leads_dashboard(
           </details>
           <div class="search-note">Ищем прямой коммерческий сигнал: “ищу / нужен / посоветуйте” + рекламный канал + ICP-контекст. Просто статьи и агентства, которые продают себя, режутся.</div>
           <div class="actions" style="justify-content:flex-start;margin-top:10px;">
-            <a class="link-btn" href="/people-leads/export">Excel</a>
             <form method="post" action="/people-leads/clear" onsubmit="return confirm('Очистить people-результаты?')">
               <button class="danger-btn" type="submit">Очистить</button>
             </form>
