@@ -17,7 +17,7 @@ from enrichment.domain_analyzer import analyze_domain
 from focus_importer import import_focus_file
 from scoring.icp_classifier import classify_icp
 from social_leads.exporter import export_social_leads_to_xlsx
-from social_leads.tenchat_finder import collect_people_leads
+from social_leads.tenchat_finder import DEFAULT_TENCHAT_PRESET, TENCHAT_SEARCH_PRESETS, collect_people_leads
 from storage.db import init_db
 from storage.lead_repository import (
     clear_web_leads,
@@ -82,6 +82,7 @@ PEOPLE_JOB = {
     "last_finished_at": None,
     "last_error": None,
     "last_result": None,
+    "last_preset": DEFAULT_TENCHAT_PRESET,
     "last_custom_queries": "",
     "last_total_limit": 40,
 }
@@ -371,7 +372,11 @@ async def import_focus_from_dashboard(file: UploadFile = File(...), project_id: 
     )
 
 
-def _run_people_collect_job(custom_queries: str | None = None, total_limit: int = 40) -> None:
+def _run_people_collect_job(
+    custom_queries: str | None = None,
+    total_limit: int = 40,
+    preset: str = DEFAULT_TENCHAT_PRESET,
+) -> None:
     with JOB_LOCK:
         if PEOPLE_JOB["running"]:
             return
@@ -382,6 +387,7 @@ def _run_people_collect_job(custom_queries: str | None = None, total_limit: int 
                 "last_finished_at": None,
                 "last_error": None,
                 "last_result": None,
+                "last_preset": preset if preset in TENCHAT_SEARCH_PRESETS else DEFAULT_TENCHAT_PRESET,
                 "last_custom_queries": custom_queries or "",
                 "last_total_limit": max(5, min(120, int(total_limit or 40))),
             }
@@ -391,6 +397,7 @@ def _run_people_collect_job(custom_queries: str | None = None, total_limit: int 
         result = asyncio.run(
             collect_people_leads(
                 custom_queries=custom_queries,
+                preset=preset,
                 total_limit=max(5, min(120, int(total_limit or 40))),
             )
         )
@@ -419,6 +426,9 @@ def _run_people_collect_job(custom_queries: str | None = None, total_limit: int 
 @app.post("/people-leads/search")
 async def start_people_leads_search(request: Request, background_tasks: BackgroundTasks):
     form = {key: values[-1] for key, values in parse_qs((await request.body()).decode("utf-8")).items()}
+    preset = str(form.get("preset") or DEFAULT_TENCHAT_PRESET)
+    if preset not in TENCHAT_SEARCH_PRESETS:
+        preset = DEFAULT_TENCHAT_PRESET
     custom_queries = str(form.get("custom_queries") or "").strip()
     try:
         total_limit = max(5, min(120, int(form.get("total_limit") or 40)))
@@ -426,10 +436,11 @@ async def start_people_leads_search(request: Request, background_tasks: Backgrou
         total_limit = 40
     with JOB_LOCK:
         running = bool(PEOPLE_JOB["running"])
+        PEOPLE_JOB["last_preset"] = preset
         PEOPLE_JOB["last_custom_queries"] = custom_queries
         PEOPLE_JOB["last_total_limit"] = total_limit
     if not running:
-        background_tasks.add_task(_run_people_collect_job, custom_queries or None, total_limit)
+        background_tasks.add_task(_run_people_collect_job, custom_queries or None, total_limit, preset)
     return RedirectResponse("/people-leads", status_code=303)
 
 
@@ -497,18 +508,15 @@ def people_leads_dashboard(
     with JOB_LOCK:
         people_job = dict(PEOPLE_JOB)
 
+    selected_people_preset = str(people_job.get("last_preset") or DEFAULT_TENCHAT_PRESET)
+    if selected_people_preset not in TENCHAT_SEARCH_PRESETS:
+        selected_people_preset = DEFAULT_TENCHAT_PRESET
     form_custom_queries = str(people_job.get("last_custom_queries") or "")
-    if not form_custom_queries:
-        form_custom_queries = "\n".join(
-            [
-                'собственник маркетплейс бренд',
-                'основатель Wildberries Ozon производитель',
-                'директор по маркетингу маркетплейсы бренд',
-                'комиссии маркетплейсов маржа производитель',
-                'внешний трафик маркетплейсы бренд',
-                'direct канал производитель бренд',
-            ]
-        )
+    preset_queries = "\n".join(TENCHAT_SEARCH_PRESETS[selected_people_preset]["queries"])
+    preset_options = "".join(
+        f"<option value='{escape(value)}' {_selected(selected_people_preset, value)}>{escape(config['label'])}</option>"
+        for value, config in TENCHAT_SEARCH_PRESETS.items()
+    )
     try:
         form_total_limit = max(5, min(120, int(people_job.get("last_total_limit") or 40)))
     except ValueError:
@@ -588,11 +596,11 @@ def people_leads_dashboard(
 
     result = people_job.get("last_result") or {}
     if people_job.get("running"):
-        job_text = "Идет поиск people/ICP-сигналов..."
+        job_text = "Идет поиск прямого спроса в TenChat..."
     elif people_job.get("last_error"):
         job_text = f"Ошибка: {people_job['last_error']}"
     elif result and "deleted" in result:
-        job_text = f"People-результаты очищены: удалено {result.get('deleted', 0)}."
+        job_text = f"TenChat-результаты очищены: удалено {result.get('deleted', 0)}."
     elif result:
         job_text = (
             f"Последний сбор: {result.get('created', 0)} новых, {result.get('updated', 0)} обновлено, "
@@ -600,12 +608,12 @@ def people_leads_dashboard(
             f"Завершен: {people_job.get('last_finished_at')}"
         )
     else:
-        job_text = "People-поиск еще не запускался."
+        job_text = "TenChat-поиск еще не запускался."
 
     query_params = {"status": status, "min_score": min_score, "q": q, "per_page": per_page}
     prev_params = {**query_params, "page": max(1, page - 1)}
     next_params = {**query_params, "page": page + 1}
-    cards = "".join(card(item) for item in items) or "<div class='empty'>Под эти фильтры people-лидов пока нет.</div>"
+    cards = "".join(card(item) for item in items) or "<div class='empty'>Под эти фильтры TenChat-лидов пока нет.</div>"
 
     return f"""
     <!doctype html>
@@ -635,11 +643,14 @@ def people_leads_dashboard(
         .metric b {{ display:block; font-size:22px; }}
         .metric span, .domain {{ color:var(--muted); }}
         .panel {{ padding:12px; margin-bottom:10px; }}
-        .search-form {{ display:grid; grid-template-columns:1fr 100px 132px; gap:10px; align-items:end; }}
+        .search-form {{ display:grid; grid-template-columns:260px 100px 132px; gap:10px; align-items:end; }}
         label {{ display:grid; gap:5px; color:var(--muted); font-size:12px; }}
         input, select, textarea {{ width:100%; border:1px solid #cbd5e1; border-radius:7px; padding:9px 10px; background:#fff; color:#0f172a; font:inherit; }}
         textarea {{ min-height:68px; resize:vertical; }}
         .search-note {{ color:var(--muted); margin-top:8px; }}
+        .query-details {{ margin-top:10px; border:1px solid var(--line); border-radius:8px; padding:10px; background:#f8fafc; }}
+        .query-details summary {{ border:0; padding:0; color:var(--blue); }}
+        .preset-preview {{ margin-top:8px; color:var(--muted); font-size:12px; white-space:pre-wrap; }}
         .job {{ color:#059669; margin-top:10px; }}
         .filters {{ display:grid; grid-template-columns:120px 120px 1fr 120px; gap:10px; align-items:end; border-bottom:1px solid var(--line); padding-bottom:12px; margin-bottom:12px; }}
         .pager {{ display:flex; justify-content:space-between; align-items:center; color:var(--muted); margin:10px 0; }}
@@ -668,8 +679,8 @@ def people_leads_dashboard(
       <main class="page">
         <div class="topbar">
           <div>
-            <h1>TenChat ICP</h1>
-            <div class="subtitle">Ищем не сайты, а людей и контексты: собственники, маркетинг, ecom, бренды и производители с признаками боли по росту, маркетплейсам, direct и спросу.</div>
+            <h1>TenChat спрос</h1>
+            <div class="subtitle">Ищем прямые запросы на рекламу и подрядчиков, затем отсекаем не-ICP: агентства, вакансии, обучение и общий контент без покупательского намерения.</div>
           </div>
           <nav class="nav">
             {nav_button("Web", "/web-leads")}
@@ -678,20 +689,27 @@ def people_leads_dashboard(
           </nav>
         </div>
         <section class="metrics">
-          {metric("всего people-лидов", count_social_leads())}
+          {metric("всего лидов", count_social_leads())}
           {metric("score 70+", count_social_leads(min_score=70))}
           {metric("score 45+", count_social_leads(min_score=45))}
           {metric("новые", count_social_leads(status="new"))}
         </section>
         <section class="panel">
-          <form method="post" action="/people-leads/search" class="search-form">
-            <label>Поисковые запросы
-              <textarea name="custom_queries" placeholder="По одному запросу на строку. site:tenchat.ru можно не писать.">{escape(form_custom_queries)}</textarea>
+          <form id="people-search-form" method="post" action="/people-leads/search" class="search-form">
+            <label>Сценарий поиска
+              <select name="preset">{preset_options}</select>
             </label>
             <label>Лимит <input type="number" name="total_limit" min="5" max="120" value="{form_total_limit}"></label>
             <button class="primary-btn" type="submit">Запустить</button>
           </form>
-          <div class="search-note">Ищем связку: роль или человек + бренд/производитель/ecom + боль по MP/direct/росту. Без персоны или компании результат режется.</div>
+          <details class="query-details">
+            <summary>Свои запросы и текущий пресет</summary>
+            <label>Дополнительные запросы
+              <textarea name="custom_queries" form="people-search-form" placeholder="Можно оставить пустым. По одному запросу на строку, site:tenchat.ru можно не писать.">{escape(form_custom_queries)}</textarea>
+            </label>
+            <div class="preset-preview">{escape(preset_queries)}</div>
+          </details>
+          <div class="search-note">Ищем прямой коммерческий сигнал: “ищу / нужен / посоветуйте” + рекламный канал + ICP-контекст. Просто статьи и агентства, которые продают себя, режутся.</div>
           <div class="actions" style="justify-content:flex-start;margin-top:10px;">
             <a class="link-btn" href="/people-leads/export">Excel</a>
             <form method="post" action="/people-leads/clear" onsubmit="return confirm('Очистить people-результаты?')">

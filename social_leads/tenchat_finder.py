@@ -14,18 +14,53 @@ from storage.social_lead_repository import save_social_leads
 
 logger = logging.getLogger(__name__)
 
-DEFAULT_TENCHAT_QUERIES = [
-    'site:tenchat.ru "собственник" "маркетплейс"',
-    'site:tenchat.ru "основатель" "Wildberries" "Ozon"',
-    'site:tenchat.ru "директор по маркетингу" "маркетплейсы"',
-    'site:tenchat.ru "производитель" "официальный сайт" "TenChat"',
-    'site:tenchat.ru "российский бренд" "маркетплейсы"',
-    'site:tenchat.ru "собственное производство" "бренд"',
-    'site:tenchat.ru "комиссии маркетплейсов" "бренд"',
-    'site:tenchat.ru "маржа" "Wildberries" "Ozon"',
-    'site:tenchat.ru "внешний трафик" "маркетплейсы"',
-    'site:tenchat.ru "direct" "бренд" "маркетплейсы"',
-]
+TENCHAT_SEARCH_PRESETS = {
+    "ad_demand": {
+        "label": "Прямой спрос на рекламу",
+        "queries": [
+            'site:tenchat.ru "ищу агентство" "яндекс директ"',
+            'site:tenchat.ru "нужен подрядчик" "реклама" "интернет-магазин"',
+            'site:tenchat.ru "посоветуйте директолога" "интернет-магазин"',
+            'site:tenchat.ru "кто настраивает яндекс директ" "бренд"',
+            'site:tenchat.ru "запустить рекламу" "производитель"',
+            'site:tenchat.ru "ищем специалиста" "яндекс директ" "бренд"',
+            'site:tenchat.ru "нужен маркетолог" "wildberries" "ozon"',
+            'site:tenchat.ru "подрядчик по performance" "бренд"',
+        ],
+    },
+    "mp_external_traffic": {
+        "label": "Внешний трафик на MP",
+        "queries": [
+            'site:tenchat.ru "внешний трафик" "wildberries" "ozon"',
+            'site:tenchat.ru "трафик на маркетплейсы" "бренд"',
+            'site:tenchat.ru "реклама на wildberries" "производитель"',
+            'site:tenchat.ru "реклама на ozon" "бренд"',
+            'site:tenchat.ru "промостраницы" "маркетплейсы"',
+        ],
+    },
+    "direct_ecom": {
+        "label": "Директ / РСЯ для ecom",
+        "queries": [
+            'site:tenchat.ru "яндекс директ" "интернет-магазин"',
+            'site:tenchat.ru "рся" "интернет-магазин"',
+            'site:tenchat.ru "директ не окупается" "интернет-магазин"',
+            'site:tenchat.ru "дорогие заявки" "яндекс директ"',
+            'site:tenchat.ru "реклама на сайт" "производитель"',
+        ],
+    },
+    "growth_pain": {
+        "label": "Боль экономики роста",
+        "queries": [
+            'site:tenchat.ru "растет дрр" "wildberries"',
+            'site:tenchat.ru "растет cac" "бренд"',
+            'site:tenchat.ru "комиссии маркетплейсов" "маржа"',
+            'site:tenchat.ru "маркетплейсы не масштабируются"',
+            'site:tenchat.ru "сайт не продает" "бренд"',
+        ],
+    },
+}
+
+DEFAULT_TENCHAT_PRESET = "ad_demand"
 
 ROLE_SIGNALS = {
     "собственник": 20,
@@ -83,9 +118,47 @@ PAIN_SIGNALS = {
     "потолок": 12,
 }
 
+DEMAND_INTENT_SIGNALS = {
+    "ищу": 14,
+    "ищем": 14,
+    "нужен": 14,
+    "нужна": 14,
+    "нужно": 10,
+    "посоветуйте": 16,
+    "порекомендуйте": 16,
+    "кто умеет": 18,
+    "кто может": 14,
+    "подрядчик": 14,
+    "агентство": 12,
+    "директолог": 16,
+    "специалист": 10,
+    "настроить": 10,
+    "запустить рекламу": 18,
+    "вести рекламу": 14,
+    "помогите": 12,
+}
+
+AD_CHANNEL_SIGNALS = {
+    "яндекс директ": 18,
+    "директ": 12,
+    "рся": 14,
+    "промостраницы": 14,
+    "внешний трафик": 16,
+    "трафик на маркетплейсы": 16,
+    "performance": 12,
+    "перфоманс": 12,
+    "реклама": 10,
+    "таргет": 8,
+    "лиды": 8,
+}
+
 NEGATIVE_SIGNALS = {
-    "агентство": -20,
     "маркетинговое агентство": -25,
+    "мы агентство": -30,
+    "наше агентство": -30,
+    "рекламное агентство": -25,
+    "оказываем услуги": -25,
+    "наши услуги": -20,
     "smm": -15,
     "таргетолог": -18,
     "seo": -16,
@@ -100,24 +173,26 @@ NEGATIVE_SIGNALS = {
 }
 
 
-def build_people_queries(custom_queries: str | None = None) -> list[str]:
+def build_people_queries(custom_queries: str | None = None, preset: str = DEFAULT_TENCHAT_PRESET) -> list[str]:
     lines = [line.strip() for line in (custom_queries or "").splitlines() if line.strip()]
+    base_queries = TENCHAT_SEARCH_PRESETS.get(preset, TENCHAT_SEARCH_PRESETS[DEFAULT_TENCHAT_PRESET])["queries"]
     if not lines:
-        return DEFAULT_TENCHAT_QUERIES
+        return list(base_queries)
     result = []
     for line in lines:
         result.append(line if "site:" in line else f"site:tenchat.ru {line}")
-    return result
+    return list(dict.fromkeys([*result, *base_queries]))
 
 
 async def collect_people_leads(
     *,
     custom_queries: str | None = None,
+    preset: str = DEFAULT_TENCHAT_PRESET,
     total_limit: int = 40,
     per_query_limit: int = 8,
     concurrency: int = 6,
 ) -> dict:
-    queries = build_people_queries(custom_queries)
+    queries = build_people_queries(custom_queries, preset=preset)
     candidates = await search_urls_multi(
         queries,
         per_query_limit=per_query_limit,
@@ -141,6 +216,7 @@ async def collect_people_leads(
     save_stats = save_social_leads(enriched)
     return {
         "queries": len(queries),
+        "preset": preset,
         "candidates": len(candidates),
         "analyzed": len(candidates),
         "kept": len(enriched),
@@ -248,12 +324,16 @@ def _classify_people_lead(
     role_hits = _hits(full_text, ROLE_SIGNALS)
     icp_hits = _hits(full_text, ICP_SIGNALS)
     pain_hits = _hits(full_text, PAIN_SIGNALS)
+    intent_hits = _hits(full_text, DEMAND_INTENT_SIGNALS)
+    channel_hits = _hits(full_text, AD_CHANNEL_SIGNALS)
     negative_hits = _hits(full_text, NEGATIVE_SIGNALS)
 
     score = (
-        min(30, sum(weight for _, weight in role_hits))
-        + min(30, sum(weight for _, weight in icp_hits))
-        + min(30, sum(weight for _, weight in pain_hits))
+        min(28, sum(weight for _, weight in intent_hits))
+        + min(24, sum(weight for _, weight in channel_hits))
+        + min(18, sum(weight for _, weight in icp_hits))
+        + min(14, sum(weight for _, weight in pain_hits))
+        + min(12, sum(weight for _, weight in role_hits))
         + sum(weight for _, weight in negative_hits)
     )
     if person_name:
@@ -263,36 +343,53 @@ def _classify_people_lead(
     if company_name:
         score += 6
     if icp_hits and pain_hits:
+        score += 5
+    if intent_hits and channel_hits:
+        score += 12
+    if channel_hits and icp_hits:
         score += 8
-    if role_hits and icp_hits:
-        score += 7
+    if role_hits and (intent_hits or icp_hits):
+        score += 5
+    direct_demand = bool(intent_hits and channel_hits)
+    strategic_demand = bool(channel_hits and icp_hits and pain_hits)
     if not person_name and not role_title:
         score = min(score, 42)
     if not person_name and not role_title and not company_name:
         score = min(score, 30)
-    if not role_hits:
-        score -= 10
+    if not direct_demand and not strategic_demand:
+        score = min(score, 34)
     if not icp_hits:
-        score -= 8
+        score -= 6
     if _looks_like_generic_article(full_text) and not person_name:
         score -= 18
     score = max(0, min(100, score))
 
-    if score >= 70:
-        lead_fit = "hot_people_icp"
-        cjm_stage = "consideration"
-    elif score >= 45:
-        lead_fit = "warm_people_icp"
-        cjm_stage = "awareness"
+    if score >= 70 and direct_demand:
+        lead_fit = "hot_ad_demand"
+        cjm_stage = "direct_request"
+    elif score >= 45 and (direct_demand or strategic_demand):
+        lead_fit = "warm_ad_demand"
+        cjm_stage = "channel_search"
     else:
         lead_fit = "weak_signal"
         cjm_stage = "signal_only"
 
-    pain_detected = _format_hits(pain_hits, 8) or "явная боль не найдена, есть косвенный ICP-сигнал"
+    pain_parts = []
+    if intent_hits:
+        pain_parts.append("намерение: " + _format_hits(intent_hits, 5))
+    if channel_hits:
+        pain_parts.append("канал: " + _format_hits(channel_hits, 5))
+    if pain_hits:
+        pain_parts.append("боль: " + _format_hits(pain_hits, 5))
+    pain_detected = "; ".join(pain_parts) or "явный рекламный запрос не найден"
     likely_icp = _format_hits(icp_hits, 8) or "нужно проверить вручную"
     why_parts = []
     if role_hits:
         why_parts.append("роль/влияние: " + _format_hits(role_hits, 5))
+    if intent_hits:
+        why_parts.append("прямой спрос: " + _format_hits(intent_hits, 5))
+    if channel_hits:
+        why_parts.append("канал рекламы: " + _format_hits(channel_hits, 5))
     if icp_hits:
         why_parts.append("ICP: " + _format_hits(icp_hits, 6))
     if pain_hits:
@@ -300,7 +397,7 @@ def _classify_people_lead(
     if negative_hits:
         why_parts.append("минусы: " + _format_hits(negative_hits, 4))
     why_relevant = "; ".join(why_parts) or "слабый сигнал, нужна ручная проверка"
-    outreach_angle = _build_angle(pain_hits, icp_hits)
+    outreach_angle = _build_angle(pain_hits, icp_hits, intent_hits, channel_hits)
 
     return {
         "lead_score": score,
@@ -313,9 +410,18 @@ def _classify_people_lead(
     }
 
 
-def _build_angle(pain_hits: list[tuple[str, int]], icp_hits: list[tuple[str, int]]) -> str:
+def _build_angle(
+    pain_hits: list[tuple[str, int]],
+    icp_hits: list[tuple[str, int]],
+    intent_hits: list[tuple[str, int]] | None = None,
+    channel_hits: list[tuple[str, int]] | None = None,
+) -> str:
     pain = _format_hits(pain_hits, 4)
     icp = _format_hits(icp_hits, 4)
+    intent = _format_hits(intent_hits or [], 4)
+    channel = _format_hits(channel_hits or [], 4)
+    if intent and channel:
+        return "Зайти через прямой запрос: коротко уточнить задачу, канал, текущую экономику и предложить безопасную диагностику без обещания быстрых продаж."
     if "внешний трафик" in pain or "direct" in pain:
         return "Зайти через безопасный тест direct/внешнего спроса без замены текущих каналов."
     if "комиссии" in pain or "маржа" in pain or "аукцион" in pain:
@@ -331,9 +437,11 @@ def _is_actionable_people_candidate(item: dict) -> bool:
     has_person = bool(item.get("person_name") or item.get("role_title"))
     has_company = bool(item.get("company_name"))
     score = int(item.get("lead_score") or 0)
-    if has_person and score >= 38:
+    lead_fit = str(item.get("lead_fit") or "")
+    is_ad_demand = lead_fit in {"hot_ad_demand", "warm_ad_demand"}
+    if has_person and is_ad_demand and score >= 38:
         return True
-    if has_company and score >= 45:
+    if has_company and is_ad_demand and score >= 45:
         return True
     return False
 
@@ -356,6 +464,12 @@ def _looks_like_generic_article(text: str) -> bool:
 def _build_opener(person_name: str | None, role_title: str | None, item: dict) -> str:
     greeting = f"{person_name.split()[0]}, добрый день." if person_name else "Добрый день."
     role_hint = f" По профилю вижу, что вы близко к теме {role_title.lower()}." if role_title else ""
+    if item.get("lead_fit") in {"hot_ad_demand", "warm_ad_demand"}:
+        return (
+            f"{greeting}{role_hint} Увидел, что у вас всплыла задача по рекламе: {item.get('pain_detected')}. "
+            "Чтобы не предлагать абстрактный Директ, я бы сначала посмотрел связку: продукт, площадки, сайт/direct и экономика первого заказа. "
+            "Если актуально, могу коротко подсказать, где обычно быстро видно, есть ли смысл тестировать канал."
+        )
     return (
         f"{greeting}{role_hint} Зацепился за контекст вокруг {item.get('pain_detected')}. "
         "У брендов и производителей в такой точке часто вопрос не в том, чтобы резко менять каналы, "
