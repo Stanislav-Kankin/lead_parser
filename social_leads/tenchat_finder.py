@@ -17,9 +17,20 @@ from storage.social_lead_repository import save_social_leads
 
 logger = logging.getLogger(__name__)
 
-DEFAULT_TENCHAT_PRESET = "project_people_wide"
+DEFAULT_TENCHAT_PRESET = "mass_people"
 
 TENCHAT_SEARCH_PRESETS = {
+    "mass_people": {
+        "label": "Массовый поиск ЛПР",
+        "description": "Широкий поиск собственников, CEO, коммерческих директоров, маркетинга и e-commerce по товарным бизнесам.",
+        "queries": [
+            'site:tenchat.ru "основатель" "отзывы" "бренд"',
+            'site:tenchat.ru "собственник" "отзывы" "производство"',
+            'site:tenchat.ru "генеральный директор" "отзывы" "интернет-магазин"',
+            'site:tenchat.ru "директор по маркетингу" "отзывы" "бренд"',
+            'site:tenchat.ru "руководитель e-commerce" "отзывы" "маркетплейсы"',
+        ],
+    },
     "project_people": {
         "label": "ЛПР по Web-проекту",
         "description": "Берет компании из выбранного web-проекта и ищет владельцев, CEO, маркетинг и e-commerce в TenChat.",
@@ -122,6 +133,7 @@ TENCHAT_SEARCH_PRESETS = {
 TENCHAT_SEARCH_PRESETS = {
     key: TENCHAT_SEARCH_PRESETS[key]
     for key in [
+        "mass_people",
         "project_people_wide",
         "project_people",
         "brand_owners",
@@ -168,6 +180,69 @@ PROJECT_CONTEXT_TERMS = [
     "директ",
     "рост продаж",
 ]
+
+PEOPLE_SEARCH_ROLES = [
+    "основатель",
+    "сооснователь",
+    "собственник",
+    "владелец",
+    "предприниматель",
+    "CEO",
+    "генеральный директор",
+    "коммерческий директор",
+    "директор по маркетингу",
+    "руководитель маркетинга",
+    "директор по развитию",
+    "руководитель e-commerce",
+]
+
+PEOPLE_SEARCH_CONTEXTS = [
+    "бренд",
+    "производитель",
+    "производство",
+    "собственное производство",
+    "интернет-магазин",
+    "e-commerce",
+    "маркетплейсы",
+    "wildberries",
+    "ozon",
+    "direct",
+    "d2c",
+    "косметика",
+    "одежда",
+    "текстиль",
+    "товары для дома",
+    "продукты питания",
+    "бытовая химия",
+]
+
+PRESET_QUERY_MATRIX = {
+    "mass_people": {
+        "roles": PEOPLE_SEARCH_ROLES,
+        "contexts": PEOPLE_SEARCH_CONTEXTS,
+        "max_queries": 120,
+    },
+    "brand_owners": {
+        "roles": ["основатель", "сооснователь", "собственник", "владелец", "CEO", "генеральный директор"],
+        "contexts": ["бренд", "российский бренд", "товарный бренд", "косметика", "одежда", "товары для дома", "продукты питания"],
+        "max_queries": 80,
+    },
+    "marketplace_sellers": {
+        "roles": ["собственник", "основатель", "CEO", "генеральный директор", "руководитель e-commerce"],
+        "contexts": ["wildberries", "ozon", "маркетплейсы", "селлер", "интернет-магазин", "бренд"],
+        "max_queries": 70,
+    },
+    "ecom_people": {
+        "roles": ["директор по маркетингу", "руководитель маркетинга", "руководитель e-commerce", "коммерческий директор", "директор по развитию"],
+        "contexts": ["интернет-магазин", "e-commerce", "бренд", "direct", "d2c", "маркетплейсы", "wildberries", "ozon"],
+        "max_queries": 80,
+    },
+    "manufacturers_people": {
+        "roles": ["основатель", "собственник", "генеральный директор", "коммерческий директор", "директор по развитию"],
+        "contexts": ["производитель", "производство", "собственное производство", "бренд", "товары", "FMCG"],
+        "max_queries": 70,
+    },
+}
 
 ROLE_SIGNALS = {
     "собственник": 28,
@@ -302,12 +377,14 @@ async def collect_people_leads(
     )
     queries = [item.query for item in query_items]
     query_map = {item.query: item for item in query_items}
-    candidates = await search_urls_multi(
+    search_limit = max(total_limit, min(total_limit * 3, 600))
+    raw_candidates = await search_urls_multi(
         queries,
         per_query_limit=per_query_limit,
-        total_limit=total_limit,
+        total_limit=search_limit,
         allowed_domains={"tenchat.ru"},
     )
+    candidates = _filter_people_candidates(raw_candidates)[: max(1, int(total_limit or 40))]
 
     semaphore = asyncio.Semaphore(max(1, concurrency))
 
@@ -339,6 +416,7 @@ async def collect_people_leads(
         "project_id": project_id,
         "project_name": project_name,
         "candidates": len(candidates),
+        "raw_candidates": len(raw_candidates),
         "analyzed": len(candidates),
         "kept": len(enriched),
         "created": save_stats.get("created", 0),
@@ -387,6 +465,11 @@ def build_people_query_items(
             seen.add(query)
             items.append(QueryItem(query=query))
 
+    for query in _generated_people_queries_for_preset(preset):
+        if query not in seen:
+            seen.add(query)
+            items.append(QueryItem(query=query))
+
     preset_config = TENCHAT_SEARCH_PRESETS.get(preset, TENCHAT_SEARCH_PRESETS[DEFAULT_TENCHAT_PRESET])
     for query in preset_config["queries"]:
         if query not in seen:
@@ -394,6 +477,21 @@ def build_people_query_items(
             items.append(QueryItem(query=query))
 
     return items[:220]
+
+
+def _generated_people_queries_for_preset(preset: str) -> list[str]:
+    config = PRESET_QUERY_MATRIX.get(preset)
+    if not config:
+        return []
+    roles = list(config.get("roles") or [])
+    contexts = list(config.get("contexts") or [])
+    max_queries = int(config.get("max_queries") or 80)
+    queries: list[str] = []
+    for role in roles:
+        for context in contexts:
+            queries.append(f'site:tenchat.ru "{role}" "отзывы" "{context}"')
+            queries.append(f'site:tenchat.ru "{role}" "{context}" "ООО"')
+    return list(dict.fromkeys(queries))[:max_queries]
 
 
 async def _fetch_public_page(url: str | None) -> dict:
@@ -804,26 +902,101 @@ def _build_opener(person_name: str | None, role_title: str | None, company_name:
     )
 
 
+TENCHAT_NON_PROFILE_PATHS = {
+    "about",
+    "api",
+    "blog",
+    "career",
+    "companies",
+    "contacts",
+    "documents",
+    "feed",
+    "jobs",
+    "media",
+    "people",
+    "premium",
+    "resume",
+    "search",
+    "static",
+    "support",
+    "tags",
+    "vacancies",
+}
+
+
+def _first_tenchat_path_part(url: str | None) -> tuple[str, str] | None:
+    if not url:
+        return None
+    parsed = urlparse(url)
+    host = (parsed.netloc or "").lower()
+    if not host.endswith("tenchat.ru"):
+        return None
+    path = parsed.path.strip("/")
+    if not path:
+        return "", ""
+    first = path.split("/", 1)[0]
+    return first, path
+
+
+def _is_tenchat_company_url(url: str | None) -> bool:
+    path_info = _first_tenchat_path_part(url)
+    if not path_info:
+        return False
+    first, path = path_info
+    return path == first and bool(re.fullmatch(r"\d{10,15}", first))
+
+
+def _filter_people_candidates(candidates: list[dict]) -> list[dict]:
+    result: list[dict] = []
+    seen_profiles: set[str] = set()
+    for candidate in candidates:
+        url = normalize_url(candidate.get("url")) or str(candidate.get("url") or "")
+        profile_url, _post_url = _split_tenchat_url(url)
+        if not profile_url:
+            continue
+        profile_key = profile_url.lower().rstrip("/")
+        if profile_key in seen_profiles:
+            continue
+        seen_profiles.add(profile_key)
+        item = dict(candidate)
+        item["original_url"] = url
+        item["url"] = profile_url
+        result.append(item)
+    return result
+
+
 def _split_tenchat_url(url: str) -> tuple[str | None, str | None]:
     parsed = urlparse(url)
     if not parsed.netloc:
         return None, None
     path = parsed.path.strip("/")
     if not path:
-        return url, None
+        return None, None
     first = path.split("/", 1)[0]
-    profile_url = f"{parsed.scheme or 'https'}://{parsed.netloc}/{first}" if first.isdigit() else None
+    profile_url = f"{parsed.scheme or 'https'}://{parsed.netloc}/{first}" if _is_tenchat_profile_path(first) else None
     post_url = url if not profile_url or path != first else None
     return profile_url, post_url
 
 
 def _is_tenchat_profile_url(url: str | None) -> bool:
-    if not url:
+    path_info = _first_tenchat_path_part(url)
+    if not path_info:
         return False
-    parsed = urlparse(url)
-    host = (parsed.netloc or "").lower()
-    path = parsed.path.strip("/")
-    return host.endswith("tenchat.ru") and bool(re.fullmatch(r"\d+", path))
+    first, path = path_info
+    return path == first and _is_tenchat_profile_path(first)
+
+
+def _is_tenchat_profile_path(first: str) -> bool:
+    if not first:
+        return False
+    lowered = first.lower()
+    if lowered in TENCHAT_NON_PROFILE_PATHS:
+        return False
+    if re.fullmatch(r"\d{10,15}", first):
+        return False
+    if re.fullmatch(r"\d{4,9}", first):
+        return True
+    return bool(re.fullmatch(r"[A-Za-z0-9_.-]{3,50}", first))
 
 
 def _brand_from_domain(domain: str | None) -> str | None:
