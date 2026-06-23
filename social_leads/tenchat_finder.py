@@ -24,11 +24,13 @@ TENCHAT_SEARCH_PRESETS = {
         "label": "Массовый поиск ЛПР",
         "description": "Широкий поиск собственников, CEO, коммерческих директоров, маркетинга и e-commerce по товарным бизнесам.",
         "queries": [
-            'site:tenchat.ru "основатель" "отзывы" "бренд"',
-            'site:tenchat.ru "собственник" "отзывы" "производство"',
-            'site:tenchat.ru "генеральный директор" "отзывы" "интернет-магазин"',
-            'site:tenchat.ru "директор по маркетингу" "отзывы" "бренд"',
-            'site:tenchat.ru "руководитель e-commerce" "отзывы" "маркетплейсы"',
+            "основатель",
+            "собственник",
+            "владелец бизнеса",
+            "генеральный директор",
+            "директор по маркетингу",
+            "руководитель e-commerce",
+            "коммерческий директор",
         ],
     },
     "project_people": {
@@ -377,23 +379,32 @@ async def collect_people_leads(
     )
     queries = [item.query for item in query_items]
     query_map = {item.query: item for item in query_items}
-    search_limit = max(total_limit, min(total_limit * 3, 600))
-    raw_candidates = await search_urls_multi(
-        queries,
-        per_query_limit=per_query_limit,
-        total_limit=search_limit,
-        allowed_domains={"tenchat.ru"},
+    candidates = await _search_people_candidates_browser(
+        query_items,
+        total_limit=max(1, int(total_limit or 40)),
+        per_query_limit=max(1, int(per_query_limit or 7)),
     )
-    candidates = _filter_people_candidates(raw_candidates)[: max(1, int(total_limit or 40))]
+    raw_candidates: list[dict] = candidates
+    source_mode = "tenchat_browser"
+    if not candidates:
+        source_mode = "external_search_fallback"
+        search_limit = max(total_limit, min(total_limit * 3, 600))
+        raw_candidates = await search_urls_multi(
+            queries,
+            per_query_limit=per_query_limit,
+            total_limit=search_limit,
+            allowed_domains={"tenchat.ru"},
+        )
+        candidates = _filter_people_candidates(raw_candidates)[: max(1, int(total_limit or 40))]
 
     semaphore = asyncio.Semaphore(max(1, concurrency))
 
     async def enrich(candidate: dict) -> dict | None:
         async with semaphore:
             query_item = query_map.get(str(candidate.get("source_query") or ""))
-            page = await _fetch_public_page(candidate.get("url"))
+            page = candidate.get("page") or await _fetch_public_page(candidate.get("url"))
             company_page = {}
-            company_url = _best_company_url(page)
+            company_url = candidate.get("company_url") or _best_company_url(page)
             if company_url:
                 company_page = await _fetch_public_page(company_url)
             item = _build_social_lead(
@@ -415,6 +426,7 @@ async def collect_people_leads(
         "preset": preset,
         "project_id": project_id,
         "project_name": project_name,
+        "source_mode": source_mode,
         "candidates": len(candidates),
         "raw_candidates": len(raw_candidates),
         "analyzed": len(candidates),
@@ -465,13 +477,13 @@ def build_people_query_items(
             seen.add(query)
             items.append(QueryItem(query=query))
 
-    for query in _generated_people_queries_for_preset(preset):
+    preset_config = TENCHAT_SEARCH_PRESETS.get(preset, TENCHAT_SEARCH_PRESETS[DEFAULT_TENCHAT_PRESET])
+    for query in preset_config["queries"]:
         if query not in seen:
             seen.add(query)
             items.append(QueryItem(query=query))
 
-    preset_config = TENCHAT_SEARCH_PRESETS.get(preset, TENCHAT_SEARCH_PRESETS[DEFAULT_TENCHAT_PRESET])
-    for query in preset_config["queries"]:
+    for query in _generated_people_queries_for_preset(preset):
         if query not in seen:
             seen.add(query)
             items.append(QueryItem(query=query))
@@ -492,6 +504,219 @@ def _generated_people_queries_for_preset(preset: str) -> list[str]:
             queries.append(f'site:tenchat.ru "{role}" "отзывы" "{context}"')
             queries.append(f'site:tenchat.ru "{role}" "{context}" "ООО"')
     return list(dict.fromkeys(queries))[:max_queries]
+
+
+async def _search_people_candidates_browser(
+    query_items: list[QueryItem],
+    *,
+    total_limit: int,
+    per_query_limit: int,
+) -> list[dict]:
+    try:
+        from playwright.async_api import async_playwright
+    except Exception as exc:
+        logger.warning("[tenchat_finder] playwright_unavailable error=%s", exc)
+        return []
+
+    page_size = 20
+    results: list[dict] = []
+    seen_profiles: set[str] = set()
+    browser = None
+    try:
+        async with async_playwright() as playwright:
+            browser = await playwright.chromium.launch(
+                headless=True,
+                args=["--no-sandbox", "--disable-dev-shm-usage"],
+            )
+            context = await browser.new_context(
+                locale="ru-RU",
+                user_agent=(
+                    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                    "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125 Safari/537.36"
+                ),
+            )
+            page = await context.new_page()
+            await page.goto("https://tenchat.ru/search/people", wait_until="domcontentloaded", timeout=30000)
+
+            seen_search_texts: set[str] = set()
+            for query_item in query_items:
+                if len(results) >= total_limit:
+                    break
+                search_text = _tenchat_search_text(query_item.query)
+                if not search_text:
+                    continue
+                search_key = search_text.lower()
+                if search_key in seen_search_texts:
+                    continue
+                seen_search_texts.add(search_key)
+                query_cap = min(max(per_query_limit, page_size), max(1, total_limit - len(results)))
+                page_count = max(1, (query_cap + page_size - 1) // page_size)
+                for page_number in range(page_count):
+                    if len(results) >= total_limit:
+                        break
+                    profiles = await page.evaluate(
+                        """
+                        async ({ searchText, pageNumber, pageSize }) => {
+                          const response = await fetch(`/gostinder/api/web/account/search/elastic?page=${pageNumber}&size=${pageSize}`, {
+                            method: 'POST',
+                            headers: { accept: 'application/json', 'content-type': 'application/json' },
+                            body: JSON.stringify({ searchStr: searchText })
+                          });
+                          if (!response.ok) {
+                            return { error: `${response.status} ${await response.text()}` };
+                          }
+                          return await response.json();
+                        }
+                        """,
+                        {"searchText": search_text, "pageNumber": page_number, "pageSize": page_size},
+                    )
+                    if isinstance(profiles, dict) and profiles.get("error"):
+                        logger.warning("[tenchat_finder] tenchat_browser_api_error query=%s error=%s", search_text, profiles["error"])
+                        break
+                    if not isinstance(profiles, list) or not profiles:
+                        break
+                    for profile in profiles:
+                        candidate = _candidate_from_tenchat_profile(profile, query_item=query_item, search_text=search_text)
+                        profile_key = (candidate.get("profile_url") or candidate.get("url") or "").lower().rstrip("/")
+                        if not profile_key or profile_key in seen_profiles:
+                            continue
+                        seen_profiles.add(profile_key)
+                        results.append(candidate)
+                        if len(results) >= total_limit:
+                            break
+                    if len(profiles) < page_size:
+                        break
+            await context.close()
+    except Exception as exc:
+        logger.exception("[tenchat_finder] browser_search_failed error=%s", exc)
+        return []
+    finally:
+        if browser:
+            try:
+                await browser.close()
+            except Exception:
+                pass
+    return results
+
+
+def _tenchat_search_text(query: str | None) -> str | None:
+    if not query:
+        return None
+    raw = re.sub(r"\s+", " ", str(query)).strip()
+    if not raw:
+        return None
+    if "site:tenchat.ru" not in raw.lower():
+        return raw[:120]
+    quoted = [part.strip() for part in re.findall(r'"([^"]+)"', raw) if part.strip()]
+    useful = [
+        part
+        for part in quoted
+        if part.lower() not in {"отзывы", "ооо", "компания", "tenchat"}
+    ]
+    if useful:
+        return " ".join(useful[:2])[:120]
+    cleaned = re.sub(r"site:tenchat\.ru", "", raw, flags=re.IGNORECASE)
+    cleaned = cleaned.replace('"', " ")
+    cleaned = re.sub(r"\b(отзывы|ооо|компания)\b", " ", cleaned, flags=re.IGNORECASE)
+    cleaned = re.sub(r"\s+", " ", cleaned).strip()
+    return cleaned[:120] or None
+
+
+def _candidate_from_tenchat_profile(profile: dict, *, query_item: QueryItem, search_text: str) -> dict:
+    username = str(profile.get("username") or profile.get("defaultUsername") or profile.get("id") or "").strip()
+    profile_url = f"https://tenchat.ru/{username}" if username else ""
+    person_name = _full_name_from_profile(profile)
+    role_title = _profile_nested_value(profile, "position", "name") or _profile_nested_value(profile, "lastWorkplace", "positionName")
+    partner_name = str(profile.get("partnerName") or "").strip()
+    partner_ogrn = str(profile.get("partnerOgrn") or "").strip()
+    partner_type = str(profile.get("partnerType") or "").strip()
+    last_company_name = _profile_nested_value(profile, "lastWorkplace", "companyName")
+    last_company_ogrn = _profile_nested_value(profile, "lastWorkplace", "companyOgrn")
+    has_legal_partner = bool(_legal_name_from_api_company(partner_name)) or partner_type in {"LEGAL", "LEGAL_ENTITY", "RUS_COMPANY"}
+    company_name = (partner_name if has_legal_partner else None) or last_company_name or None
+    company_ogrn = (partner_ogrn if has_legal_partner else None) or last_company_ogrn or None
+    company_url = f"https://tenchat.ru/{company_ogrn}" if company_ogrn and re.fullmatch(r"\d{10,15}", str(company_ogrn)) else None
+    city = _profile_nested_value(profile, "city", "city")
+    country = _profile_nested_value(profile, "city", "country")
+    skills = ", ".join(
+        str(item.get("name") or "").strip()
+        for item in (profile.get("keySkills") or [])
+        if isinstance(item, dict) and item.get("name")
+    )
+    highlight = _strip_html(profile.get("highlightDescription") or "")
+    work_status = str(profile.get("workStatus") or "")
+    text_parts = [
+        person_name,
+        role_title,
+        city,
+        country,
+        company_name,
+        company_ogrn,
+        skills,
+        highlight,
+        work_status,
+        str(profile.get("accountType") or ""),
+        str(profile.get("subtype") or ""),
+    ]
+    text = " ".join(part for part in text_parts if part)
+    title = " — ".join(part for part in [person_name, role_title, company_name] if part)
+    if not title:
+        title = f"TenChat profile {username}".strip()
+    page = {
+        "url": profile_url,
+        "title": title,
+        "h1": person_name,
+        "text": text,
+        "full_text": text,
+        "company_urls": [company_url] if company_url else [],
+        "company_ogrn": company_ogrn,
+        "company_legal_name": _legal_name_from_api_company(company_name),
+    }
+    return {
+        "url": profile_url,
+        "profile_url": profile_url,
+        "source_query": query_item.query,
+        "title": title,
+        "body": text,
+        "person_name": person_name,
+        "role_title": role_title,
+        "company_name": company_name,
+        "page": page,
+        "company_url": company_url,
+        "tenchat_search_text": search_text,
+        "tenchat_raw_id": profile.get("id"),
+    }
+
+
+def _full_name_from_profile(profile: dict) -> str | None:
+    parts = [profile.get("surname"), profile.get("name"), profile.get("patronymic")]
+    value = " ".join(str(part).strip() for part in parts if part)
+    return value or None
+
+
+def _profile_nested_value(profile: dict, key: str, nested_key: str) -> str | None:
+    value = profile.get(key)
+    if not isinstance(value, dict):
+        return None
+    nested = value.get(nested_key)
+    return str(nested).strip() if nested else None
+
+
+def _strip_html(value: str | None) -> str:
+    if not value:
+        return ""
+    return " ".join(BeautifulSoup(str(value), "lxml").get_text(" ", strip=True).split())
+
+
+def _legal_name_from_api_company(value: str | None) -> str | None:
+    if not value:
+        return None
+    cleaned = _clean_value(value)
+    if not cleaned:
+        return None
+    if re.search(r"\b(ооо|ао|пао|ип)\b", cleaned, flags=re.IGNORECASE):
+        return cleaned
+    return None
 
 
 async def _fetch_public_page(url: str | None) -> dict:
@@ -549,8 +774,15 @@ def _build_social_lead(
     company_text = company_page.get("full_text") or company_page.get("text") or ""
     h1 = page.get("h1") or ""
     full_text = " ".join([title, h1, snippet, text, company_text]).lower()
-    person_name, role_title = _parse_person_and_role(title, h1)
-    company_name = _extract_company(full_text) or (query_item.web_company_name if query_item else None)
+    parsed_person_name, parsed_role_title = _parse_person_and_role(title, h1)
+    person_name = candidate.get("person_name") or parsed_person_name
+    role_title = candidate.get("role_title") or parsed_role_title
+    company_name = (
+        candidate.get("company_name")
+        or _extract_company(full_text)
+        or page.get("company_legal_name")
+        or (query_item.web_company_name if query_item else None)
+    )
     company_inn = (
         company_page.get("company_inn")
         or page.get("company_inn")

@@ -796,7 +796,7 @@ def _people_leads_dashboard_v2(
                 <label>Компаний из web-проекта <input type="number" name="project_limit" min="1" max="150" value="{form_project_limit}"></label>
                 <label>Лимит TenChat-кандидатов <input type="number" name="total_limit" min="5" max="300" value="{form_total_limit}"></label>
                 <label>Свои запросы
-                  <textarea name="custom_queries" placeholder="По одному запросу на строку. Можно без site:tenchat.ru">{escape(form_custom_queries)}</textarea>
+                  <textarea name="custom_queries" placeholder="По одному запросу TenChat на строку: основатель, собственник, директор по маркетингу">{escape(form_custom_queries)}</textarea>
                 </label>
                 <button class="primary-btn" type="submit">Найти людей</button>
               </form>
@@ -805,7 +805,7 @@ def _people_leads_dashboard_v2(
                 <div class="preset-preview">{escape(preset_queries)}</div>
               </details>
               {project_warning}
-              <div class="hint">Лучший режим: сначала собрать Web ICP проект, потом тут выбрать его и искать ЛПР по найденным компаниям.</div>
+              <div class="hint">Для быстрого сбора людей используй короткие запросы как в TenChat: основатель, собственник, директор по маркетингу. Web-проект нужен только для точечного поиска по уже найденным компаниям.</div>
               <form method="post" action="/people-leads/clear?project_id={selected_project_id}" onsubmit="return confirm('Очистить выбранный TenChat-срез?')">
                 <button class="danger-btn" type="submit">{'Очистить проект' if selected_project_id else 'Очистить всю TenChat-базу'}</button>
               </form>
