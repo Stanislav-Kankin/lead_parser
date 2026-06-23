@@ -204,7 +204,7 @@ def _run_web_collect_job(
                 "last_preset": preset,
                 "last_custom_queries": custom_queries or "",
                 "last_template_category": search_category or WEB_JOB.get("last_template_category") or "",
-                "last_total_limit": max(5, min(120, int(total_limit or 40))),
+                "last_total_limit": max(5, min(300, int(total_limit or 40))),
                 "last_project_id": project_id,
                 "last_project_name": project_name or "",
             }
@@ -399,7 +399,7 @@ def _run_people_collect_job(
                 "last_total_limit": max(5, min(120, int(total_limit or 40))),
                 "last_project_id": project_id,
                 "last_project_name": project_name or "",
-                "last_project_limit": max(1, min(80, int(project_limit or 25))),
+                "last_project_limit": max(1, min(150, int(project_limit or 25))),
             }
         )
 
@@ -408,10 +408,10 @@ def _run_people_collect_job(
             collect_people_leads(
                 custom_queries=custom_queries,
                 preset=preset,
-                total_limit=max(5, min(120, int(total_limit or 40))),
+                total_limit=max(5, min(300, int(total_limit or 40))),
                 project_id=project_id,
                 project_name=project_name,
-                project_limit=max(1, min(80, int(project_limit or 25))),
+                project_limit=max(1, min(150, int(project_limit or 25))),
             )
         )
         with JOB_LOCK:
@@ -450,11 +450,11 @@ async def start_people_leads_search(request: Request, background_tasks: Backgrou
     project = get_project(project_id)
     project_name = project.name if project else ""
     try:
-        total_limit = max(5, min(120, int(form.get("total_limit") or 40)))
+        total_limit = max(5, min(300, int(form.get("total_limit") or 40)))
     except ValueError:
         total_limit = 40
     try:
-        project_limit = max(1, min(80, int(form.get("project_limit") or 25)))
+        project_limit = max(1, min(150, int(form.get("project_limit") or 25)))
     except ValueError:
         project_limit = 25
     with JOB_LOCK:
@@ -559,6 +559,7 @@ def _people_leads_dashboard_v2(
 
     projects = list_projects()
     selected_project = get_project(selected_project_id) if selected_project_id else None
+    selected_project_web_count = next((int(project["count"] or 0) for project in projects if int(project["id"]) == selected_project_id), 0)
     search_project_id = selected_project_id or int(people_job.get("last_project_id") or 0)
     selected_people_preset = str(people_job.get("last_preset") or DEFAULT_TENCHAT_PRESET)
     if selected_people_preset not in TENCHAT_SEARCH_PRESETS:
@@ -569,8 +570,8 @@ def _people_leads_dashboard_v2(
         f"<option value='{escape(value)}' {_selected(selected_people_preset, value)}>{escape(config['label'])}</option>"
         for value, config in TENCHAT_SEARCH_PRESETS.items()
     )
-    form_total_limit = max(5, min(120, int(people_job.get("last_total_limit") or 40)))
-    form_project_limit = max(1, min(80, int(people_job.get("last_project_limit") or 25)))
+    form_total_limit = max(5, min(300, int(people_job.get("last_total_limit") or 40)))
+    form_project_limit = max(1, min(150, int(people_job.get("last_project_limit") or 25)))
 
     def nav_button(label: str, href: str, active: bool = False) -> str:
         cls = "nav-pill active" if active else "nav-pill"
@@ -688,6 +689,11 @@ def _people_leads_dashboard_v2(
     next_params = {**query_params, "page": page + 1}
     cards = "".join(card(item) for item in items) or "<div class='empty'>Под эти фильтры людей пока нет.</div>"
     selected_project_title = "Общий пул" if not selected_project_id else (selected_project.name if selected_project else "Проект")
+    project_warning = (
+        "<div class='warning'>В этом проекте пока 0 web-компаний. Для поиска по конкретным компаниям сначала собери Web ICP базу в этот проект.</div>"
+        if selected_project_id and selected_project_web_count == 0
+        else ""
+    )
 
     return f"""
     <!doctype html>
@@ -725,6 +731,7 @@ def _people_leads_dashboard_v2(
         input, select, textarea {{ width:100%; border:1px solid #cbd5e1; border-radius:7px; padding:9px 10px; background:#fff; color:#0f172a; font:inherit; }}
         textarea {{ min-height:68px; resize:vertical; }}
         .hint {{ color:var(--muted); font-size:12px; margin:8px 0; }}
+        .warning {{ margin:8px 0; padding:8px 10px; border:1px solid #fde68a; background:#fffbeb; color:#92400e; border-radius:7px; font-size:12px; }}
         .query-details {{ margin-top:10px; border:1px solid var(--line); border-radius:8px; padding:10px; background:#f8fafc; }}
         .query-details summary {{ border:0; padding:0; color:var(--blue); }}
         .preset-preview {{ margin-top:8px; color:var(--muted); font-size:12px; white-space:pre-wrap; }}
@@ -783,8 +790,8 @@ def _people_leads_dashboard_v2(
                 <label>Сценарий
                   <select name="preset">{preset_options}</select>
                 </label>
-                <label>Компаний из web-проекта <input type="number" name="project_limit" min="1" max="80" value="{form_project_limit}"></label>
-                <label>Лимит TenChat-кандидатов <input type="number" name="total_limit" min="5" max="120" value="{form_total_limit}"></label>
+                <label>Компаний из web-проекта <input type="number" name="project_limit" min="1" max="150" value="{form_project_limit}"></label>
+                <label>Лимит TenChat-кандидатов <input type="number" name="total_limit" min="5" max="300" value="{form_total_limit}"></label>
                 <label>Свои запросы
                   <textarea name="custom_queries" placeholder="По одному запросу на строку. Можно без site:tenchat.ru">{escape(form_custom_queries)}</textarea>
                 </label>
@@ -794,6 +801,7 @@ def _people_leads_dashboard_v2(
                 <summary>Шаблон текущего сценария</summary>
                 <div class="preset-preview">{escape(preset_queries)}</div>
               </details>
+              {project_warning}
               <div class="hint">Лучший режим: сначала собрать Web ICP проект, потом тут выбрать его и искать ЛПР по найденным компаниям.</div>
               <form method="post" action="/people-leads/clear?project_id={selected_project_id}" onsubmit="return confirm('Очистить выбранный TenChat-срез?')">
                 <button class="danger-btn" type="submit">{'Очистить проект' if selected_project_id else 'Очистить всю TenChat-базу'}</button>

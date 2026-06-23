@@ -17,7 +17,7 @@ from storage.social_lead_repository import save_social_leads
 
 logger = logging.getLogger(__name__)
 
-DEFAULT_TENCHAT_PRESET = "project_people"
+DEFAULT_TENCHAT_PRESET = "project_people_wide"
 
 TENCHAT_SEARCH_PRESETS = {
     "project_people": {
@@ -51,21 +51,122 @@ TENCHAT_SEARCH_PRESETS = {
             'site:tenchat.ru "руководитель маркетинга" "производитель"',
         ],
     },
+    "project_people_wide": {
+        "label": "Широко по Web-проекту",
+        "description": "Больше вариаций по каждой web-компании: роли, бренд, ecom, маркетплейсы, direct и развитие.",
+        "queries": [
+            'site:tenchat.ru "основатель" "интернет-магазин" "бренд"',
+            'site:tenchat.ru "собственник" "wildberries" "ozon"',
+            'site:tenchat.ru "генеральный директор" "российский бренд"',
+            'site:tenchat.ru "руководитель e-commerce" "маркетплейсы"',
+            'site:tenchat.ru "директор по развитию" "direct"',
+        ],
+    },
+    "brand_owners": {
+        "label": "Собственники брендов",
+        "description": "Ищет основателей и собственников товарных брендов.",
+        "queries": [
+            'site:tenchat.ru "основатель бренда"',
+            'site:tenchat.ru "собственник бренда"',
+            'site:tenchat.ru "основатель" "российский бренд"',
+            'site:tenchat.ru "сооснователь" "бренд" "товары"',
+            'site:tenchat.ru "владелец бренда" "маркетплейсы"',
+        ],
+    },
+    "marketplace_sellers": {
+        "label": "Селлеры WB/Ozon",
+        "description": "Ищет владельцев и руководителей селлерского бизнеса на маркетплейсах.",
+        "queries": [
+            'site:tenchat.ru "собственник" "wildberries"',
+            'site:tenchat.ru "основатель" "ozon"',
+            'site:tenchat.ru "селлер" "генеральный директор"',
+            'site:tenchat.ru "продавец на wildberries" "собственник"',
+            'site:tenchat.ru "маркетплейсы" "директор по развитию"',
+        ],
+    },
+    "beauty_fashion": {
+        "label": "Beauty / fashion",
+        "description": "Косметика, одежда, обувь, аксессуары, fashion-бренды.",
+        "queries": [
+            'site:tenchat.ru "основатель" "бренд косметики"',
+            'site:tenchat.ru "собственник" "косметика" "wildberries"',
+            'site:tenchat.ru "основатель" "бренд одежды"',
+            'site:tenchat.ru "директор по маркетингу" "fashion бренд"',
+            'site:tenchat.ru "производство одежды" "генеральный директор"',
+        ],
+    },
+    "food_household": {
+        "label": "Food / home / household",
+        "description": "Продукты, товары для дома, бытовая химия, текстиль.",
+        "queries": [
+            'site:tenchat.ru "основатель" "продукты питания"',
+            'site:tenchat.ru "собственник" "товары для дома"',
+            'site:tenchat.ru "генеральный директор" "бытовая химия"',
+            'site:tenchat.ru "производитель" "текстиль" "директор"',
+            'site:tenchat.ru "интернет-магазин" "товары для дома" "основатель"',
+        ],
+    },
+    "direct_brands": {
+        "label": "Direct / D2C бренды",
+        "description": "Руководители брендов с собственным сайтом, direct и интернет-магазином.",
+        "queries": [
+            'site:tenchat.ru "основатель" "d2c"',
+            'site:tenchat.ru "интернет-магазин" "собственник"',
+            'site:tenchat.ru "директор по маркетингу" "direct"',
+            'site:tenchat.ru "руководитель e-commerce" "интернет-магазин"',
+            'site:tenchat.ru "бренд" "собственный сайт" "основатель"',
+        ],
+    },
+}
+
+TENCHAT_SEARCH_PRESETS = {
+    key: TENCHAT_SEARCH_PRESETS[key]
+    for key in [
+        "project_people_wide",
+        "project_people",
+        "brand_owners",
+        "marketplace_sellers",
+        "ecom_people",
+        "manufacturers_people",
+        "beauty_fashion",
+        "food_household",
+        "direct_brands",
+    ]
 }
 
 DECISION_ROLES = [
     "основатель",
     "сооснователь",
     "собственник",
+    "владелец",
+    "предприниматель",
     "ceo",
     "генеральный директор",
+    "исполнительный директор",
     "управляющий партнер",
     "коммерческий директор",
     "директор по маркетингу",
     "руководитель маркетинга",
+    "директор по продажам",
     "директор по развитию",
     "руководитель e-commerce",
     "e-commerce директор",
+    "ecommerce директор",
+    "head of ecommerce",
+]
+
+PROJECT_CONTEXT_TERMS = [
+    "бренд",
+    "производитель",
+    "интернет-магазин",
+    "маркетплейсы",
+    "wildberries",
+    "ozon",
+    "e-commerce",
+    "direct",
+    "d2c",
+    "директ",
+    "рост продаж",
 ]
 
 ROLE_SIGNALS = {
@@ -186,7 +287,7 @@ async def collect_people_leads(
     custom_queries: str | None = None,
     preset: str = DEFAULT_TENCHAT_PRESET,
     total_limit: int = 40,
-    per_query_limit: int = 5,
+    per_query_limit: int = 7,
     concurrency: int = 6,
     project_id: int | None = None,
     project_name: str | None = None,
@@ -246,12 +347,12 @@ def build_people_query_items(
 
     if project_id:
         web_leads = get_web_leads(
-            limit=max(1, min(80, int(project_limit or 25))),
+            limit=max(1, min(150, int(project_limit or 25))),
             project_id=project_id,
             min_score=35,
         )
         for lead in web_leads:
-            for query in _queries_for_web_lead(lead):
+            for query in _queries_for_web_lead(lead, preset=preset):
                 if query in seen:
                     continue
                 seen.add(query)
@@ -280,7 +381,7 @@ def build_people_query_items(
             seen.add(query)
             items.append(QueryItem(query=query))
 
-    return items[:120]
+    return items[:220]
 
 
 async def _fetch_public_page(url: str | None) -> dict:
@@ -355,13 +456,24 @@ def _build_social_lead(candidate: dict, page: dict, *, query_item: QueryItem | N
     }
 
 
-def _queries_for_web_lead(lead: Lead) -> list[str]:
+def _queries_for_web_lead(lead: Lead, *, preset: str = DEFAULT_TENCHAT_PRESET) -> list[str]:
     names = _company_name_candidates(lead)
     queries: list[str] = []
-    for name in names[:2]:
-        for role in DECISION_ROLES[:8]:
+    is_wide = preset == "project_people_wide"
+    max_names = 3 if is_wide else 2
+    role_limit = 14 if is_wide else 8
+    max_queries = 30 if is_wide else 12
+    category_terms = _category_terms_for_lead(lead)
+
+    for name in names[:max_names]:
+        for role in DECISION_ROLES[:role_limit]:
             queries.append(f'site:tenchat.ru "{name}" "{role}"')
-    return queries[:12]
+        if is_wide:
+            for term in [*category_terms, *PROJECT_CONTEXT_TERMS][:12]:
+                queries.append(f'site:tenchat.ru "{name}" "{term}"')
+            queries.append(f'site:tenchat.ru "{name}" "отзывы"')
+            queries.append(f'site:tenchat.ru "{name}" "компания"')
+    return list(dict.fromkeys(queries))[:max_queries]
 
 
 def _company_name_candidates(lead: Lead) -> list[str]:
@@ -380,6 +492,42 @@ def _company_name_candidates(lead: Lead) -> list[str]:
             seen.add(clean.lower())
             result.append(clean)
     return result
+
+
+def _category_terms_for_lead(lead: Lead) -> list[str]:
+    raw = " ".join(
+        str(value or "")
+        for value in [
+            lead.search_category,
+            lead.lead_type,
+            lead.evidence,
+            lead.icp_reason,
+            lead.site_assessment,
+        ]
+    ).lower()
+    terms: list[str] = []
+    category_map = {
+        "космет": "косметика",
+        "beauty": "косметика",
+        "одеж": "одежда",
+        "fashion": "одежда",
+        "обув": "обувь",
+        "текст": "текстиль",
+        "дом": "товары для дома",
+        "household": "товары для дома",
+        "еда": "продукты питания",
+        "продукт": "продукты питания",
+        "fmcg": "fmcg",
+        "маркетплейс": "маркетплейсы",
+        "wildberries": "wildberries",
+        "ozon": "ozon",
+        "direct": "direct",
+        "d2c": "d2c",
+    }
+    for marker, term in category_map.items():
+        if marker in raw and term not in terms:
+            terms.append(term)
+    return terms
 
 
 def _parse_person_and_role(title: str, h1: str) -> tuple[str | None, str | None]:
