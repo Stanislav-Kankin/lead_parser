@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import re
 
+from telegram_signals.humanization import build_human_reply_draft, build_human_reply_variants
 from telegram_signals.keywords import (
     BRAND_KEYWORDS,
     BUSINESS_HINT_KEYWORDS,
@@ -1985,20 +1986,21 @@ def classify_signal(
         cjm_partner_friction_hits=cjm_partner_friction_hits,
     )
     outreach = classify_outreach_segment(full_l, lead_fit, message_type)
-    openers = _build_openers(
-        author_name=author_name,
-        chat_title=chat_title,
-        message_text=text,
-        lead_category=lead_category,
-        marketplace=marketplace,
-        likely_icp=likely_icp,
-    )
-    reply = _build_best_reply(
-        opener_text=openers.get("opener_expert") or openers.get("opener_soft") or "",
-        lead_category=lead_category,
+    reply = build_human_reply_draft(
+        pain_category=lead_category,
         bridge_to_offer=bridge_to_offer,
         marketplace=marketplace,
-        cjm_stage=cjm_stage,
+        niche=niche,
+        search_profile=segment,
+        message_text=text,
+    )
+    openers = build_human_reply_variants(
+        pain_category=lead_category,
+        bridge_to_offer=bridge_to_offer,
+        marketplace=marketplace,
+        niche=niche,
+        search_profile=segment,
+        message_text=text,
     )
 
     reasons = []

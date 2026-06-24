@@ -41,6 +41,7 @@ from storage.social_lead_repository import (
     update_social_lead,
 )
 from telegram_signals.exporter import export_signals_to_xlsx
+from telegram_signals.humanization import build_second_touch_bridge
 from telegram_signals.keywords import CHAT_BAD_HINTS, CHAT_DISCOVERY_KEYWORDS, CHAT_GOOD_HINTS, SEGMENT_LABELS
 from telegram_signals.repository import (
     WORKING_LEAD_FITS,
@@ -173,6 +174,13 @@ LEAD_FIT_LABELS = {
     "not_icp": "Не ICP",
     "noise": "Шум",
     "contractor": "Подрядчик",
+}
+
+REPLY_TONE_LABELS = {
+    "helpful": "Полезный ответ",
+    "expert": "Экспертный ответ",
+    "sales_bridge": "Есть мост к AdBeam",
+    "do_not_contact": "Не писать первым",
 }
 
 
@@ -2419,13 +2427,56 @@ def telegram_signals_dashboard(
         message_link = _message_link(item)
         contact_link = _contact_link(item)
         text = escape(_short(item.text_excerpt or item.message_text, 520))
-        opener = escape(_short(item.best_reply_draft or item.opener_expert or item.opener_soft or item.recommended_opener, 520))
+        do_not_contact = item.reply_tone == "do_not_contact"
+        opener_raw = _short(
+            item.best_reply_draft
+            or ("Не писать первым: нет релевантного моста к предложению AdBeam." if do_not_contact else "")
+            or item.opener_expert
+            or item.opener_soft
+            or item.recommended_opener,
+            520,
+        )
+        opener = escape(opener_raw)
+        variant_rows = []
+        if not do_not_contact:
+            for variant_label, variant_text in [
+                ("Telegram-стиль", item.opener_soft),
+                ("Экспертный", item.opener_expert),
+                ("B2B для собственника", item.opener_sales),
+            ]:
+                variant_raw = _short(variant_text or "", 520)
+                if not variant_raw:
+                    continue
+                variant_rows.append(
+                    "<div class='reply-variant'>"
+                    f"<b>{escape(variant_label)}</b>"
+                    f"<p>{escape(variant_raw)}</p>"
+                    f"<button type='button' class='copy-btn' data-copy='{escape(variant_raw, quote=True)}'>Копировать</button>"
+                    "</div>"
+                )
+        reply_variants = (
+            "<details class='reply-variants'><summary>Три варианта сообщения</summary>"
+            + "".join(variant_rows)
+            + "</details>"
+            if variant_rows
+            else ""
+        )
+        second_touch = ""
+        if item.status == "replied" and not do_not_contact:
+            second_touch_raw = build_second_touch_bridge()
+            second_touch = (
+                "<details class='reply-variants' open><summary>Второе касание</summary>"
+                f"<div class='reply-variant'><p>{escape(second_touch_raw)}</p>"
+                f"<button type='button' class='copy-btn' data-copy='{escape(second_touch_raw, quote=True)}'>Копировать</button>"
+                "</div></details>"
+            )
         category = CATEGORY_LABELS.get(item.lead_category or "", item.lead_category or "Не определено")
         lead_fit_label = LEAD_FIT_LABELS.get(item.lead_fit or "", item.lead_fit or "-")
         status_label = STATUS_LABELS.get(item.status or "new", item.status or "Новый")
         review_label = REVIEW_LABELS.get(item.review_status or "unchecked", item.review_status or "Не разобран")
         reject_reason_label = REJECT_REASON_LABELS.get(item.reject_reason or "", item.reject_reason or "")
         cjm_stage_label = CJM_STAGE_LABELS.get(item.cjm_stage or "", item.cjm_stage or "")
+        reply_tone_label = REPLY_TONE_LABELS.get(item.reply_tone or "", item.reply_tone or "Полезный ответ")
         selected_tags = set(_split_tags(item.crm_tag))
         tag_labels = [CRM_TAG_LABELS.get(tag, tag) for tag in selected_tags]
         tag_label = ", ".join(tag_labels) if tag_labels else "Без тега"
@@ -2501,6 +2552,7 @@ def telegram_signals_dashboard(
                 <span>{escape(category)}</span>
                 <span>{escape(lead_fit_label)}</span>
                 <span>{escape(item.bridge_to_offer or "no_bridge")}</span>
+                <span>{escape(reply_tone_label)}</span>
               </div>
               {f"<div class='why-line'>{why_actionable}</div>" if why_actionable else ""}
 
@@ -2512,7 +2564,9 @@ def telegram_signals_dashboard(
                 <section>
                   <div class="section-title">Черновик захода</div>
                   <p>{opener}</p>
-                  <button type="button" class="copy-btn" data-copy="{escape(opener, quote=True)}">Скопировать черновик</button>
+                  <button type="button" class="copy-btn" data-copy="{escape(opener_raw, quote=True)}">Скопировать черновик</button>
+                  {reply_variants}
+                  {second_touch}
                 </section>
               </div>
 
@@ -2986,6 +3040,12 @@ def telegram_signals_dashboard(
           font: inherit;
         }}
         .copy-btn.done {{ background: #ecfdf3; border-color: #abefc6; color: #067647; }}
+        .reply-variants {{ margin-top: 12px; border-top: 1px solid var(--line); padding-top: 10px; }}
+        .reply-variants summary {{ cursor: pointer; color: var(--blue); font-weight: 700; }}
+        .reply-variant {{ padding: 10px 0; border-bottom: 1px solid var(--line); }}
+        .reply-variant:last-child {{ border-bottom: 0; padding-bottom: 0; }}
+        .reply-variant b {{ display: block; margin-bottom: 5px; font-size: 13px; }}
+        .reply-variant .copy-btn {{ margin-top: 8px; }}
         .card-footer {{
           display: flex;
           justify-content: space-between;
