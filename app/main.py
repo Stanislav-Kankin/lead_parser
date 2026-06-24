@@ -19,7 +19,7 @@ from scoring.icp_classifier import classify_icp
 from social_leads.exporter import export_social_focus_to_xlsx, export_social_lead_inns_to_xlsx, export_social_leads_to_xlsx
 from social_leads.finance_dashboard import render_social_focus_dashboard
 from social_leads.focus_importer import import_social_focus_file
-from social_leads.outreach_templates import save_outreach_template
+from social_leads.outreach_templates import reset_outreach_templates, save_outreach_template
 from social_leads.tenchat_finder import DEFAULT_TENCHAT_PRESET, TENCHAT_SEARCH_PRESETS, collect_people_leads
 from storage.db import init_db
 from storage.lead_repository import (
@@ -636,6 +636,15 @@ async def update_people_outreach_template(request: Request, project_id: int = 0)
         )
     return RedirectResponse(
         f"/people-leads/finance?{urlencode({'project_id': project_id, 'draft_key': template_key, 'draft_saved': 1})}",
+        status_code=303,
+    )
+
+
+@app.post("/people-leads/outreach-templates/reset")
+def reset_people_outreach_templates(project_id: int = 0):
+    reset_outreach_templates()
+    return RedirectResponse(
+        f"/people-leads/finance?{urlencode({'project_id': project_id, 'draft_key': 'universal', 'draft_saved': 1})}",
         status_code=303,
     )
 

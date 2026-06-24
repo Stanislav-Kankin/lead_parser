@@ -195,6 +195,9 @@ def render_social_focus_dashboard(
                   <button class="button" id="copy-raw-draft" type="button">Копировать</button>
                 </div>
               </form>
+              <form method="post" action="/people-leads/outreach-templates/reset?project_id={project_id}" onsubmit="return confirm('Вернуть новые базовые тексты?')">
+                <button class="button" type="submit">Вернуть базовые</button>
+              </form>
             </section>
           </aside>
           <section>
