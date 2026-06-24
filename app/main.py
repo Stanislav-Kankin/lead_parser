@@ -19,6 +19,7 @@ from scoring.icp_classifier import classify_icp
 from social_leads.exporter import export_social_focus_to_xlsx, export_social_lead_inns_to_xlsx, export_social_leads_to_xlsx
 from social_leads.finance_dashboard import render_social_focus_dashboard
 from social_leads.focus_importer import import_social_focus_file
+from social_leads.outreach_templates import save_outreach_template
 from social_leads.tenchat_finder import DEFAULT_TENCHAT_PRESET, TENCHAT_SEARCH_PRESETS, collect_people_leads
 from storage.db import init_db
 from storage.lead_repository import (
@@ -592,6 +593,8 @@ def people_focus_dashboard(
     active: int = 0,
     unmatched: int = 0,
     error: str = "",
+    draft_key: str = "universal",
+    draft_saved: int = 0,
 ):
     return render_social_focus_dashboard(
         project_id=project_id,
@@ -606,7 +609,26 @@ def people_focus_dashboard(
             "active": active,
             "unmatched": unmatched,
             "error": error,
+            "draft_saved": draft_saved,
         },
+        draft_key=draft_key,
+    )
+
+
+@app.post("/people-leads/outreach-templates")
+async def update_people_outreach_template(request: Request, project_id: int = 0):
+    form = {key: values[-1] for key, values in parse_qs((await request.body()).decode("utf-8")).items()}
+    template_key = str(form.get("template_key") or "universal")
+    try:
+        save_outreach_template(template_key, str(form.get("template_text") or ""))
+    except ValueError:
+        return RedirectResponse(
+            f"/people-leads/finance?{urlencode({'project_id': project_id, 'draft_key': template_key, 'error': 'draft'})}",
+            status_code=303,
+        )
+    return RedirectResponse(
+        f"/people-leads/finance?{urlencode({'project_id': project_id, 'draft_key': template_key, 'draft_saved': 1})}",
+        status_code=303,
     )
 
 

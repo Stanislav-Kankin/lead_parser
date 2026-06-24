@@ -2,8 +2,10 @@ from __future__ import annotations
 
 from collections import defaultdict
 from html import escape
+import json
 from urllib.parse import urlencode
 
+from social_leads.outreach_templates import load_outreach_templates
 from storage.lead_repository import get_project, list_projects
 from storage.social_lead_repository import get_social_leads
 
@@ -15,6 +17,7 @@ def render_social_focus_dashboard(
     company_status: str,
     page: int,
     import_result: dict,
+    draft_key: str = "universal",
 ) -> str:
     project_id = int(project_id or 0)
     page = max(1, int(page or 1))
@@ -59,6 +62,17 @@ def render_social_focus_dashboard(
     next_url = "/people-leads/finance?" + urlencode({**base_params, "page": page + 1})
     project_name = project.name if project else "Общий пул"
     upload_disabled = "disabled" if not project_id else ""
+    outreach_templates = load_outreach_templates()
+    selected_draft_key = draft_key if draft_key in outreach_templates else "universal"
+    selected_draft = outreach_templates[selected_draft_key]["text"]
+    draft_options = "".join(
+        f'<option value="{escape(key)}" {"selected" if key == selected_draft_key else ""}>{escape(value["label"])}</option>'
+        for key, value in outreach_templates.items()
+    )
+    templates_json = json.dumps(
+        {key: value["text"] for key, value in outreach_templates.items()},
+        ensure_ascii=False,
+    ).replace("</", "<\\/")
 
     return f"""
     <!doctype html>
@@ -85,7 +99,8 @@ def render_social_focus_dashboard(
         .panel + .panel {{ margin-top:12px; }}
         .panel h2 {{ margin:0 0 12px; font-size:16px; }}
         label {{ display:grid; gap:5px; color:var(--muted); font-size:13px; }}
-        input,select {{ width:100%; min-height:38px; border:1px solid #cbd5e1; border-radius:6px; background:#fff; padding:8px 10px; color:var(--text); }}
+        input,select,textarea {{ width:100%; min-height:38px; border:1px solid #cbd5e1; border-radius:6px; background:#fff; padding:8px 10px; color:var(--text); font:inherit; }}
+        textarea {{ min-height:180px; resize:vertical; }}
         form.stack {{ display:grid; gap:11px; }}
         .hint {{ margin-top:10px; color:var(--muted); font-size:12px; }}
         .metrics {{ display:grid; grid-template-columns:repeat(4,minmax(0,1fr)); gap:10px; margin-bottom:12px; }}
@@ -166,6 +181,21 @@ def render_social_focus_dashboard(
                 {f'<a class="button primary" href="/people-leads/export-focus?project_id={project_id}">Excel: люди + Компас</a>' if project_id else ''}
               </div>
             </section>
+            <section class="panel">
+              <h2>Черновики заходов</h2>
+              <form class="stack" method="post" action="/people-leads/outreach-templates?project_id={project_id}">
+                <label>Сценарий
+                  <select id="draft-template-key" name="template_key">{draft_options}</select>
+                </label>
+                <label>Текст
+                  <textarea id="draft-template-text" name="template_text">{escape(selected_draft)}</textarea>
+                </label>
+                <div class="actions">
+                  <button class="button primary" type="submit">Сохранить</button>
+                  <button class="button" id="copy-raw-draft" type="button">Копировать</button>
+                </div>
+              </form>
+            </section>
           </aside>
           <section>
             {import_banner}
@@ -202,6 +232,43 @@ def render_social_focus_dashboard(
           </section>
         </div>
       </main>
+      <script>
+        const outreachTemplates = {templates_json};
+        const draftSelect = document.getElementById('draft-template-key');
+        const draftText = document.getElementById('draft-template-text');
+
+        draftSelect.addEventListener('change', () => {{
+          draftText.value = outreachTemplates[draftSelect.value] || '';
+        }});
+
+        async function copyDraft(text, button) {{
+          try {{
+            await navigator.clipboard.writeText(text);
+          }} catch (_error) {{
+            const helper = document.createElement('textarea');
+            helper.value = text;
+            document.body.appendChild(helper);
+            helper.select();
+            document.execCommand('copy');
+            helper.remove();
+          }}
+          const original = button.textContent;
+          button.textContent = 'Скопировано';
+          setTimeout(() => {{ button.textContent = original; }}, 1200);
+        }}
+
+        document.getElementById('copy-raw-draft').addEventListener('click', (event) => {{
+          copyDraft(draftText.value, event.currentTarget);
+        }});
+
+        function copyPersonalizedDraft(button) {{
+          const text = draftText.value
+            .replaceAll('{{имя}}', button.dataset.person || '')
+            .replaceAll('{{компания}}', button.dataset.company || '')
+            .replaceAll('{{роль}}', button.dataset.role || '');
+          copyDraft(text, button);
+        }}
+      </script>
     </body>
     </html>
     """
@@ -216,7 +283,7 @@ def _company_card(group: list) -> str:
     website_html = f'<a href="{escape(website)}" target="_blank" rel="noreferrer">{escape(item.focus_website)}</a>' if website else "—"
     email_html = _multiline(item.focus_email)
     phone_html = _multiline(item.focus_phone)
-    people_html = "".join(_person_row(person) for person in group)
+    people_html = "".join(_person_row(person, company) for person in group)
     other_okved = escape(item.focus_other_okved or "").replace("\n", "<br>")
 
     return f"""
@@ -267,14 +334,20 @@ def _company_card(group: list) -> str:
     """
 
 
-def _person_row(item) -> str:
+def _person_row(item, company: str) -> str:
     profile = _external_url(item.profile_url or item.source_url)
     link = f'<a class="button primary" href="{escape(profile)}" target="_blank" rel="noreferrer">Написать в TenChat</a>' if profile else ""
+    copy_button = (
+        f'<button class="button" type="button" onclick="copyPersonalizedDraft(this)" '
+        f'data-person="{escape(item.person_name or "")}" data-company="{escape(company)}" '
+        f'data-role="{escape(item.role_title or "")}">Копировать заход</button>'
+    )
     return f"""
     <div class="person">
       <b>{escape(item.person_name or 'Имя не указано')}</b>
       <div class="muted">{escape(item.role_title or 'роль не указана')} · score {int(item.lead_score or 0)}</div>
       {link}
+      {copy_button}
     </div>
     """
 
@@ -293,6 +366,10 @@ def _import_banner(result: dict) -> str:
         return '<div class="banner error">Сначала выберите проект, затем загрузите файл Компаса.</div>'
     if result.get("error") == "import":
         return '<div class="banner error">Не удалось прочитать файл Компаса. Проверьте формат Excel и журнал контейнера.</div>'
+    if result.get("error") == "draft":
+        return '<div class="banner error">Черновик не сохранён: текст не должен быть пустым.</div>'
+    if result.get("draft_saved"):
+        return '<div class="banner">Черновик сохранён.</div>'
     if not result.get("imported"):
         return ""
     return (
