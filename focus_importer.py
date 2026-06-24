@@ -84,6 +84,14 @@ def import_focus_file(path: str | Path) -> dict:
     }
 
 
+def read_focus_rows(path: str | Path) -> list[dict]:
+    return _read_rows(Path(path))
+
+
+def map_focus_row(row: dict) -> dict:
+    return _map_focus_row(row)
+
+
 def _find_matching_lead(session, data: dict) -> tuple[Lead | None, str | None]:
     inn = data.get("company_inn")
     if inn:

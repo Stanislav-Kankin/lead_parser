@@ -114,6 +114,76 @@ def export_social_lead_inns_to_xlsx(project_id: int | None = None) -> Path:
     return file_path
 
 
+def export_social_focus_to_xlsx(project_id: int) -> Path:
+    items = [
+        item
+        for item in get_social_leads(limit=10000, project_id=project_id)
+        if item.focus_loaded_at is not None
+    ]
+
+    wb = Workbook()
+    ws = wb.active
+    ws.title = "tenchat_compass"
+    headers = [
+        "Имя",
+        "Роль",
+        "Организация",
+        "ИНН",
+        "Профиль TenChat",
+        "Статус предприятия",
+        "Телефон",
+        "Почта",
+        "Сайт",
+        "Выручка",
+        "Баланс",
+        "Чистая прибыль/убыток",
+        "Основной вид деятельности",
+        "Другие виды деятельности",
+        "Регион",
+        "Адрес",
+        "Руководитель",
+        "Сотрудники",
+        "Score",
+    ]
+    ws.append(headers)
+    for cell in ws[1]:
+        cell.font = Font(bold=True)
+
+    for item in items:
+        ws.append(
+            [
+                item.person_name or "",
+                item.role_title or "",
+                item.focus_legal_name or item.company_legal_name or item.company_name or "",
+                item.company_inn or "",
+                item.profile_url or item.source_url or "",
+                item.focus_status or "",
+                item.focus_phone or "",
+                item.focus_email or "",
+                item.focus_website or "",
+                item.focus_revenue or "",
+                item.focus_balance or "",
+                item.focus_profit or "",
+                item.focus_okved or "",
+                item.focus_other_okved or "",
+                item.focus_region or "",
+                item.focus_address or "",
+                item.focus_director or "",
+                item.focus_employees or "",
+                int(item.lead_score or 0),
+            ]
+        )
+
+    ws.freeze_panes = "A2"
+    ws.auto_filter.ref = ws.dimensions
+    _autosize(ws)
+    export_dir = Path("exports")
+    export_dir.mkdir(exist_ok=True)
+    file_path = export_dir / f"people_compass_project_{project_id}_{datetime.utcnow().strftime('%Y%m%d_%H%M%S')}.xlsx"
+    wb.save(file_path)
+    return file_path
+
+
 def _autosize(ws) -> None:
     for col_idx, column_cells in enumerate(ws.columns, start=1):
         max_len = 0

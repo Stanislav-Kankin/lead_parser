@@ -16,7 +16,9 @@ from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, Redirect
 from enrichment.domain_analyzer import analyze_domain
 from focus_importer import import_focus_file
 from scoring.icp_classifier import classify_icp
-from social_leads.exporter import export_social_lead_inns_to_xlsx, export_social_leads_to_xlsx
+from social_leads.exporter import export_social_focus_to_xlsx, export_social_lead_inns_to_xlsx, export_social_leads_to_xlsx
+from social_leads.finance_dashboard import render_social_focus_dashboard
+from social_leads.focus_importer import import_social_focus_file
 from social_leads.tenchat_finder import DEFAULT_TENCHAT_PRESET, TENCHAT_SEARCH_PRESETS, collect_people_leads
 from storage.db import init_db
 from storage.lead_repository import (
@@ -530,6 +532,84 @@ def export_people_lead_inns(project_id: int = 0):
     )
 
 
+@app.get("/people-leads/export-focus")
+def export_people_focus(project_id: int = 0):
+    if not project_id:
+        return RedirectResponse("/people-leads/finance?error=project", status_code=303)
+    file_path = export_social_focus_to_xlsx(project_id=project_id)
+    return FileResponse(
+        file_path,
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        filename=file_path.name,
+    )
+
+
+@app.post("/people-leads/import-focus")
+async def import_people_focus(file: UploadFile = File(...), project_id: int = 0):
+    if not project_id:
+        return RedirectResponse("/people-leads/finance?error=project", status_code=303)
+    suffix = Path(file.filename or "").suffix or ".xlsx"
+    with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as tmp:
+        tmp.write(await file.read())
+        tmp_path = Path(tmp.name)
+    try:
+        result = import_social_focus_file(tmp_path, project_id=project_id)
+    except Exception:
+        logger.exception("TenChat Compass import failed")
+        return RedirectResponse(
+            f"/people-leads/finance?{urlencode({'project_id': project_id, 'error': 'import'})}",
+            status_code=303,
+        )
+    finally:
+        try:
+            tmp_path.unlink()
+        except OSError:
+            pass
+    params = urlencode(
+        {
+            "project_id": project_id,
+            "imported": 1,
+            "rows": result["rows"],
+            "matched": result["matched_companies"],
+            "people": result["updated_people"],
+            "active": result["active_companies"],
+            "unmatched": result["unmatched"],
+        }
+    )
+    return RedirectResponse(f"/people-leads/finance?{params}", status_code=303)
+
+
+@app.get("/people-leads/finance", response_class=HTMLResponse)
+def people_focus_dashboard(
+    project_id: int = 0,
+    q: str = "",
+    company_status: str = "all",
+    page: int = 1,
+    imported: int = 0,
+    rows: int = 0,
+    matched: int = 0,
+    people: int = 0,
+    active: int = 0,
+    unmatched: int = 0,
+    error: str = "",
+):
+    return render_social_focus_dashboard(
+        project_id=project_id,
+        q=q,
+        company_status=company_status,
+        page=page,
+        import_result={
+            "imported": imported,
+            "rows": rows,
+            "matched": matched,
+            "people": people,
+            "active": active,
+            "unmatched": unmatched,
+            "error": error,
+        },
+    )
+
+
 @app.post("/people-leads/{lead_id}/crm")
 async def update_people_lead_from_dashboard(lead_id: int, request: Request):
     form = {key: values[-1] for key, values in parse_qs((await request.body()).decode("utf-8")).items()}
@@ -704,6 +784,7 @@ def _people_leads_dashboard_v2(
     cards = "".join(card(item) for item in items) or "<div class='empty'>Под эти фильтры людей пока нет.</div>"
     selected_project_title = "Общий пул" if not selected_project_id else (selected_project.name if selected_project else "Проект")
     inn_export_href = f"/people-leads/export-inn?project_id={selected_project_id}" if selected_project_id else "/people-leads/export-inn"
+    finance_href = f"/people-leads/finance?project_id={selected_project_id}" if selected_project_id else "/people-leads/finance"
     project_warning = (
         "<div class='warning'>В этом проекте пока 0 web-компаний. Для поиска по конкретным компаниям сначала собери Web ICP базу в этот проект.</div>"
         if selected_project_id and selected_project_web_count == 0
@@ -838,6 +919,7 @@ def _people_leads_dashboard_v2(
                   <a class="link-btn" href="/people-leads/export">Excel: вся база</a>
                   <a class="primary-btn" href="/people-leads/export?project_id={selected_project_id}">Excel: проект</a>
                   <a class="primary-btn" href="{inn_export_href}">Скачать ИНН</a>
+                  <a class="link-btn" href="{finance_href}">Данные Компаса</a>
                 </div>
               </div>
               <form method="get" action="/people-leads" class="filters">
